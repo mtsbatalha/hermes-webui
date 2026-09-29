@@ -3001,6 +3001,8 @@ from api.workspace import _resolve_path
 _API_SAFE_MSG_KEYS = {'role', 'content', 'tool_calls', 'tool_call_id', 'name', 'refusal', 'reasoning_content'}
 
 _NATIVE_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+_NATIVE_VIDEO_MAX_BYTES = 25 * 1024 * 1024
+_NATIVE_AUDIO_MAX_BYTES = 25 * 1024 * 1024
 
 _GATEWAY_ROUTING_TOP_LEVEL_KEYS = {
     'used_provider',
@@ -3827,12 +3829,14 @@ def _resolve_image_input_mode(cfg: dict, active_provider: str = "", active_model
 
 
 def _build_native_multimodal_message(workspace_ctx: str, msg_text: str, attachments, workspace: str, *, cfg: dict = None, active_provider: str = "", active_model: str = "", requested_provider: str = "", profile: str | Path | None = None):
-    """Build native multimodal content parts for current-turn image uploads.
+    """Build native multimodal content parts for current-turn uploads.
 
-    WebUI uploads files into the active workspace. For image files, pass the
-    bytes to Hermes as OpenAI-style image_url data URLs so vision-capable main
-    models can consume them in the same request. Non-image files intentionally
-    stay as text path attachments so the agent can inspect them with file tools.
+    WebUI uploads files into the active workspace. For image/video/audio files,
+    pass the bytes to Hermes as OpenAI-style ``image_url`` / ``video_url``
+    / ``input_audio`` data URLs so capable models can consume them inline.
+    Non-media files stay as text path attachments so the agent can inspect them
+    with file tools. Video/audio are gated by ``_NATIVE_*_MAX_BYTES`` (25 MB)
+    to avoid oversized data URLs; larger files remain workspace-only.
 
     When *cfg* is provided, respects ``agent.image_input_mode`` — if the resolved
     mode is ``"text"``, returns a plain string (attachments are not embedded) so
@@ -3861,8 +3865,8 @@ def _build_native_multimodal_message(workspace_ctx: str, msg_text: str, attachme
         _allowed_roots = (workspace_root, attachment_root)
     except Exception:
         _allowed_roots = (workspace_root,)
-    image_count = 0
 
+    media_count = 0
     for att in attachments or []:
         if not isinstance(att, dict):
             continue
@@ -3871,29 +3875,41 @@ def _build_native_multimodal_message(workspace_ctx: str, msg_text: str, attachme
             continue
         try:
             path = Path(raw_path).expanduser().resolve()
-            # Uploads should live inside the selected workspace OR the
-            # session attachment inbox (#2319). Do not read arbitrary paths
-            # from client-provided attachment metadata.
             if not any(path.is_relative_to(r) for r in _allowed_roots):
                 continue
             if not path.is_file():
                 continue
             size = path.stat().st_size
-            if size <= 0 or size > _NATIVE_IMAGE_MAX_BYTES:
+            if size <= 0:
                 continue
             mime = str(att.get('mime') or '').strip() or (mimetypes.guess_type(path.name)[0] or '')
-            if not mime.startswith('image/') or not _is_valid_image(path, mime):
+            mime_base = mime.split(';', 1)[0].strip().lower()
+            if mime_base.startswith('image/'):
+                if size > _NATIVE_IMAGE_MAX_BYTES:
+                    continue
+                if not _is_valid_image(path, mime):
+                    continue
+                data = base64.b64encode(path.read_bytes()).decode('ascii')
+                parts.append({'type': 'image_url', 'image_url': {'url': f'data:{mime};base64,{data}'}})
+                media_count += 1
+            elif mime_base.startswith('video/'):
+                if size > _NATIVE_VIDEO_MAX_BYTES:
+                    continue
+                data = base64.b64encode(path.read_bytes()).decode('ascii')
+                parts.append({'type': 'video_url', 'video_url': {'url': f'data:{mime};base64,{data}'}})
+                media_count += 1
+            elif mime_base.startswith('audio/'):
+                if size > _NATIVE_AUDIO_MAX_BYTES:
+                    continue
+                data = base64.b64encode(path.read_bytes()).decode('ascii')
+                parts.append({'type': 'input_audio', 'input_audio': {'data': data, 'format': mime_base.split('/')[-1] or 'mp3'}})
+                media_count += 1
+            else:
                 continue
-            data = base64.b64encode(path.read_bytes()).decode('ascii')
         except Exception:
             continue
-        parts.append({
-            'type': 'image_url',
-            'image_url': {'url': f'data:{mime};base64,{data}'},
-        })
-        image_count += 1
 
-    return parts if image_count else workspace_ctx + msg_text
+    return parts if media_count else workspace_ctx + msg_text
 
 
 _INLINE_THINKING_TAG_PAIRS = (
@@ -5713,13 +5729,12 @@ def _maybe_schedule_title_refresh(session, put_event, agent):
 
 
 def _strip_native_image_parts_from_content(content):
-    """Return provider-safe content with native image parts removed.
+    """Return provider-safe content with native image/video/audio parts removed.
 
-    Text-only provider endpoints (for example DeepSeek/OpenAI-compatible text
-    models) reject historical OpenAI-style ``image_url`` parts before the agent
-    can recover.  When WebUI is configured for text-mode image handling, preserve
-    textual content from mixed content arrays and drop only the native image
-    blocks from replayed history.
+    Text-only provider endpoints reject historical OpenAI-style ``image_url`` /
+    ``video_url`` / ``input_audio`` parts before the agent can recover. When
+    WebUI is configured for text-mode handling, preserve textual content and
+    drop only the native media blocks from replayed history.
     """
     if not isinstance(content, list):
         return content
@@ -5727,7 +5742,8 @@ def _strip_native_image_parts_from_content(content):
     for part in content:
         if not isinstance(part, dict):
             continue
-        if part.get('type') == 'image_url' or 'image_url' in part:
+        t = part.get('type')
+        if t in ('image_url', 'video_url', 'input_audio') or 'image_url' in part or 'video_url' in part or 'input_audio' in part:
             continue
         clean_parts.append(copy.deepcopy(part))
     if not clean_parts:
