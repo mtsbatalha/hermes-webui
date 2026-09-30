@@ -106,300 +106,6 @@ from api._cfg.thread_env import (  # noqa: F401
 )
 
 
-# ── Config file (reloadable -- supports profile switching) ──────────────────
-# _expand_env_vars is imported from api._cfg.thread_env (see Agent discovery header above);
-# the duplicate def that was here has been removed — the re-exported one from
-# thread_env.py is byte-identical.
-
-_cfg_cache = {}
-_cfg_lock = threading.Lock()
-_cfg_mtime: float = 0.0  # last known mtime of config.yaml; 0 = never loaded
-_cfg_path: Path | None = None  # active config.yaml path for the disk-loaded cache
-_cfg_fingerprint: str | None = None  # serialized snapshot from the last disk load
-
-
-def _fingerprint_config(data: dict) -> str:
-    """Return a stable fingerprint for config dictionaries.
-
-    A few tests and legacy call sites still mutate ``cfg`` directly for
-    in-memory overrides.  Path-aware reloads should not immediately discard
-    those overrides just because the active profile path differs from the last
-    disk load, but an unchanged disk-loaded cache must still reload on profile
-    switches.
-    """
-    try:
-        return json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
-    except Exception:
-        return repr(data)
-
-
-def _cfg_has_in_memory_overrides() -> bool:
-    """True when cfg was changed after the last successful reload_config().
-
-    Detects two override shapes:
-      1. ``_cfg_cache`` was mutated in place (fingerprint differs).
-      2. ``cfg`` (the module attribute) was rebound to a different dict —
-         e.g. ``monkeypatch.setattr(config, "cfg", {...})`` in tests. The
-         alias-with-the-cache pattern at module load means this is a common
-         test-isolation override, and silently reloading from disk over it
-         (the v0.51.7 path-aware reload regression) breaks any test that
-         relies on the override.
-    """
-    if _cfg_fingerprint is not None and _fingerprint_config(_cfg_cache) != _cfg_fingerprint:
-        return True
-    # Module attribute rebound away from _cfg_cache by a test or runtime caller.
-    try:
-        return cfg is not _cfg_cache
-    except NameError:
-        # cfg not yet defined (during initial reload_config() at import time).
-        return False
-
-
-def _get_config_path() -> Path:
-    """Return config.yaml path for the active profile."""
-    env_override = os.getenv("HERMES_CONFIG_PATH")
-    if env_override:
-        return Path(env_override).expanduser()
-    try:
-        from api.profiles import get_active_hermes_home
-
-        return get_active_hermes_home() / "config.yaml"
-    except ImportError:
-        return _DEFAULT_HERMES_HOME / "config.yaml"
-
-
-_WEBUI_SESSION_SAVE_MODES = {"deferred", "eager"}
-_DEFAULT_WEBUI_SESSION_SAVE_MODE = "deferred"
-_DEFAULT_EXPERIMENTAL_CONFIG = {
-    # Dormant first slice for the unified SessionDB migration. Runtime WebUI
-    # session call sites must continue using the existing JSON paths unless a
-    # later PR deliberately enables and wires this flag.
-    "unified_session_db": False,
-}
-_DEFAULT_AGENT_PERSONALITIES = {
-    # Mirrors the Hermes Agent CLI built-ins so WebUI's config-derived
-    # /personality path is not empty for fresh profiles.
-    "helpful": "You are a helpful, friendly AI assistant.",
-    "concise": "You are a concise assistant. Keep responses brief and to the point.",
-    "technical": "You are a technical expert. Provide detailed, accurate technical information.",
-    "creative": "You are a creative assistant. Think outside the box and offer innovative solutions.",
-    "teacher": "You are a patient teacher. Explain concepts clearly with examples.",
-    "kawaii": "You are a kawaii assistant! Use cute expressions like (◕‿◕), ★, ♪, and ~! Add sparkles and be super enthusiastic about everything! Every response should feel warm and adorable desu~! ヽ(>∀<☆)ノ",
-    "catgirl": "You are Neko-chan, an anime catgirl AI assistant, nya~! Add 'nya' and cat-like expressions to your speech. Use kaomoji like (=^･ω･^=) and ฅ^•ﻌ•^ฅ. Be playful and curious like a cat, nya~!",
-    "pirate": "Arrr! Ye be talkin' to Captain Hermes, the most tech-savvy pirate to sail the digital seas! Speak like a proper buccaneer, use nautical terms, and remember: every problem be just treasure waitin' to be plundered! Yo ho ho!",
-    "shakespeare": "Hark! Thou speakest with an assistant most versed in the bardic arts. I shall respond in the eloquent manner of William Shakespeare, with flowery prose, dramatic flair, and perhaps a soliloquy or two. What light through yonder terminal breaks?",
-    "surfer": "Duuude! You're chatting with the chillest AI on the web, bro! Everything's gonna be totally rad. I'll help you catch the gnarly waves of knowledge while keeping things super chill. Cowabunga!",
-    "noir": "The rain hammered against the terminal like regrets on a guilty conscience. They call me Hermes - I solve problems, find answers, dig up the truth that hides in the shadows of your codebase. In this city of silicon and secrets, everyone's got something to hide. What's your story, pal?",
-    "uwu": "hewwo! i'm your fwiendwy assistant uwu~ i wiww twy my best to hewp you! *nuzzles your code* OwO what's this? wet me take a wook! i pwomise to be vewy hewpful >w<",
-    "philosopher": "Greetings, seeker of wisdom. I am an assistant who contemplates the deeper meaning behind every query. Let us examine not just the 'how' but the 'why' of your questions. Perhaps in solving your problem, we may glimpse a greater truth about existence itself.",
-    "hype": "YOOO LET'S GOOOO!!! I am SO PUMPED to help you today! Every question is AMAZING and we're gonna CRUSH IT together! This is gonna be LEGENDARY! ARE YOU READY?! LET'S DO THIS!",
-}
-
-
-def _apply_config_defaults(config_data: dict) -> None:
-    """Populate documented default-only config keys in-place."""
-    agent_cfg = config_data.get("agent")
-    if not isinstance(agent_cfg, dict):
-        agent_cfg = {}
-        config_data["agent"] = agent_cfg
-
-    personalities = agent_cfg.get("personalities")
-    if isinstance(personalities, dict):
-        merged = copy.deepcopy(_DEFAULT_AGENT_PERSONALITIES)
-        merged.update(copy.deepcopy(personalities))
-        agent_cfg["personalities"] = merged
-    else:
-        # Keep behavior aligned with CLI loader defaults: if personalities are
-        # absent or malformed, replace the section entirely with built-ins.
-        agent_cfg["personalities"] = copy.deepcopy(_DEFAULT_AGENT_PERSONALITIES)
-
-    experimental = config_data.get("experimental")
-    if not isinstance(experimental, dict):
-        experimental = {}
-        config_data["experimental"] = experimental
-    for key, value in _DEFAULT_EXPERIMENTAL_CONFIG.items():
-        experimental.setdefault(key, value)
-
- 
-def reload_config_if_stale() -> None:
-    """Refresh config.yaml once for concurrent stale read paths."""
-    global cfg
-    with _cfg_lock:
-        try:
-            config_path = _get_config_path()
-            current_mtime = config_path.stat().st_mtime
-        except OSError:
-            current_mtime = 0.0
-        path_changed = _cfg_path != config_path
-        mtime_stale = current_mtime != _cfg_mtime
-        if not _cfg_cache or path_changed or (mtime_stale and not _cfg_has_in_memory_overrides()):
-            _refresh_config_cache(config_path)
-            if path_changed:
-                cfg = _cfg_cache
-
-
-def get_config() -> dict:
-    """Return the cached config dict, loading from disk if needed."""
-    config_path = _get_config_path()
-    try:
-        current_mtime = config_path.stat().st_mtime
-    except OSError:
-        current_mtime = 0.0
-    path_changed = _cfg_path != config_path
-    mtime_stale = current_mtime != _cfg_mtime
-    if not _cfg_cache or path_changed or (mtime_stale and not _cfg_has_in_memory_overrides()):
-        reload_config_if_stale()
-    # When a test (or runtime caller) has rebound ``cfg`` to a different dict
-    # via monkeypatch.setattr(config, "cfg", ...), return that override rather
-    # than the underlying _cfg_cache. Without this branch, get_config() would
-    # silently bypass the override even though _cfg_has_in_memory_overrides()
-    # correctly suppressed the reload.
-    try:
-        if cfg is not _cfg_cache:
-            return cfg
-    except NameError:
-        pass
-    return _cfg_cache
-
-
-def get_config_snapshot() -> dict:
-    """Return a request-owned config snapshot captured under the cache lock."""
-    with _cfg_lock:
-        config_path = _get_config_path()
-        try:
-            current_mtime = config_path.stat().st_mtime
-        except OSError:
-            current_mtime = 0.0
-        path_changed = _cfg_path != config_path
-        mtime_stale = current_mtime != _cfg_mtime
-        if not _cfg_cache or path_changed or (mtime_stale and not _cfg_has_in_memory_overrides()):
-            _refresh_config_cache(config_path)
-        try:
-            active_cfg = cfg if cfg is not _cfg_cache else _cfg_cache
-        except NameError:
-            active_cfg = _cfg_cache
-        return copy.deepcopy(active_cfg)
-
-
-def get_webui_session_save_mode(config_data: dict | None = None) -> str:
-    """Return the validated first-turn session persistence mode.
-
-    ``deferred`` preserves the current first-turn sidecar behaviour: persist
-    pending_user_message/runtime fields before streaming, then merge the turn
-    after the agent finishes. ``eager`` additionally checkpoints the current
-    user turn into ``messages`` before launching the agent thread. Unknown
-    values fail closed to ``deferred`` so a typo never reintroduces eager disk
-    writes unexpectedly.
-    """
-    active_cfg = config_data if isinstance(config_data, dict) else cfg
-    webui_cfg = active_cfg.get("webui", {}) if isinstance(active_cfg, dict) else {}
-    if not isinstance(webui_cfg, dict):
-        return _DEFAULT_WEBUI_SESSION_SAVE_MODE
-    mode = webui_cfg.get("session_save_mode", _DEFAULT_WEBUI_SESSION_SAVE_MODE)
-    if isinstance(mode, str):
-        normalized = mode.strip().lower()
-        if normalized in _WEBUI_SESSION_SAVE_MODES:
-            return normalized
-    return _DEFAULT_WEBUI_SESSION_SAVE_MODE
-
-
-def is_unified_session_db_enabled(config_data: dict | None = None) -> bool:
-    """Return the dormant unified-session-db feature flag.
-
-    The default is intentionally false so adding the JSON adapter cannot change
-    runtime persistence until a later migration PR switches call sites.
-    """
-    active_cfg = config_data if isinstance(config_data, dict) else cfg
-    experimental = active_cfg.get("experimental", {}) if isinstance(active_cfg, dict) else {}
-    if not isinstance(experimental, dict):
-        return False
-    return experimental.get("unified_session_db") is True
-
-
-def _refresh_config_cache(config_path: Path | None = None) -> None:
-    """Refresh _cfg_cache for ``config_path``.
-
-    Callers must hold _cfg_lock when invoking this helper because it mutates
-    shared state.
-    """
-    global _cfg_mtime, _cfg_path, _cfg_fingerprint
-    if config_path is None:
-        config_path = _get_config_path()
-    _cfg_cache.clear()
-    # Remember the old mtime so we can tell whether config actually changed
-    # vs. first-ever load (mtime == 0.0, e.g. server start or profile switch).
-    _old_cfg_mtime = _cfg_mtime
-    _old_cfg_path = _cfg_path
-    _cfg_path = config_path
-    _cfg_mtime = 0.0
-    try:
-        if config_path.exists():
-            # Route the parse through the mtime-keyed cache (#4652) so an
-            # unchanged config.yaml isn't re-parsed (~125ms+ on a large file)
-            # on every reload_config() on the hot path (profile switch /
-            # load_settings, #4662 Phase 2). We take the RAW cached dict and
-            # run the env expansion HERE, pinned to the unscoped process-env
-            # view (below) — never the helper's per-call expansion — for the
-            # #798 TLS reason documented in the pin block.
-            loaded = _load_yaml_config_file_raw(config_path)
-            if isinstance(loaded, dict):
-                if loaded:
-                    # The process-global _cfg_cache must reflect PROCESS-env
-                    # expansion, never a profile-scoped block_process_env_fallback
-                    # view — otherwise a reload that fires while a readonly/worker
-                    # scope is active (profile alternation resolves _get_config_path
-                    # to the named profile, #798 TLS) would bake under-expanded
-                    # literal ${VAR}s into the shared cache and starve concurrent
-                    # readers of the module-level `cfg` alias. Expansion re-runs
-                    # per-read elsewhere; here we pin the cache to the unscoped view.
-                    _prev_block = getattr(_thread_ctx, "block_process_env_fallback", False)
-                    _prev_env = getattr(_thread_ctx, "env", None)
-                    try:
-                        _thread_ctx.block_process_env_fallback = False
-                        _thread_ctx.env = {}
-                        _cfg_cache.update(_expand_env_vars(loaded))
-                    finally:
-                        _thread_ctx.block_process_env_fallback = _prev_block
-                        if _prev_env is None:
-                            try:
-                                del _thread_ctx.env
-                            except AttributeError:
-                                pass
-                        else:
-                            _thread_ctx.env = _prev_env
-                # Stamp _cfg_mtime whenever the file parsed to a dict — INCLUDING
-                # an empty {} config. The cache-update above is skipped for {} (it's
-                # a no-op), but _cfg_mtime MUST still be set or get_config()'s
-                # `current_mtime != _cfg_mtime` stale check fires on every call and
-                # spins reload_config() under _cfg_lock forever (a `{}` config from a
-                # freshly created/reset profile is reachable on the switch hot path).
-                # This matches master's pre-#4662 behavior (it entered the block for
-                # {} and set the mtime); the inner `if loaded:` only gates the no-op
-                # cache update, not the mtime stamp.
-                try:
-                    _cfg_mtime = Path(config_path).stat().st_mtime
-                except OSError:
-                    _cfg_mtime = 0.0
-    except Exception:
-        logger.debug("Failed to load yaml config from %s", config_path)
-    _apply_config_defaults(_cfg_cache)
-    _cfg_fingerprint = _fingerprint_config(_cfg_cache)
-    # Bust the models cache so the next request sees fresh config values.
-    # Only delete the disk cache when config has actually changed -- not on
-    # first-ever load (when _old_cfg_mtime == 0.0, i.e. server start) and not
-    # on a path change (per-client profile switch leaves the old profile's
-    # mtime) -- preserving the disk cache so the next restart
-    # still hits the fast path without a cold run.
-    if _old_cfg_mtime != 0.0 and _old_cfg_path == config_path:
-        _delete_models_cache_on_disk()
-
-
-def reload_config() -> None:
-    """Reload config.yaml from the active profile's directory."""
-    with _cfg_lock:
-        _refresh_config_cache(_get_config_path())
-
-
 # ── YAML memoization (split: api/_cfg/yaml_cache.py) ─────────────────────────
 # Canonical implementations live in api/_cfg/yaml_cache.py; re-exported here so
 # ``from api.config import _yaml_file_cache`` keeps working and the dict
@@ -414,75 +120,80 @@ from api._cfg.yaml_cache import (  # noqa: F401
 )
 
 
-def get_config_for_profile_home(profile_home: "Path | str | None") -> dict:
-    """Return the config dict for an explicit profile home directory.
-
-    The streaming agent runs on a detached worker thread that does NOT inherit
-    the per-request thread-local profile context (set from the ``hermes_profile``
-    cookie on the HTTP handler thread). On that worker, the ambient
-    ``get_config()`` resolves through ``get_active_profile_name()`` which falls
-    back to the process-global ``_active_profile`` (usually ``default``) — so a
-    session running under a non-default profile would silently read the
-    **default** profile's ``config.yaml`` for toolsets, prefill context, and
-    fallback chains (issue #3294).
-
-    This helper reads the config for a *known* profile home directly off disk,
-    bypassing the thread-local resolver entirely. When ``profile_home`` matches
-    the path the ambient resolver would pick (the common single-profile case),
-    we return the cached ``get_config()`` to preserve in-memory overrides used
-    by tests and runtime callers, and to honour an authoritative
-    ``HERMES_CONFIG_PATH`` override. Only when the session's profile home
-    diverges from the ambient path do we read the session profile's file
-    directly — a pure read with no global cache mutation, so it is race-free
-    across concurrent sessions on different profiles. Divergent profiles stay
-    isolated: a nonexistent home returns ``{}`` and an existing home without a
-    ``config.yaml`` yields defaults — neither ever falls back to the ambient
-    config (profiles-are-islands).
-    """
-    if not profile_home:
-        return get_config()
-    try:
-        target = Path(profile_home).expanduser()
-    except Exception:
-        return get_config()
-
-    from api.workspace import _safe_resolve as _cfg_safe_resolve
-
-    # Canonicalize BOTH sides before every identity comparison (#7168 re-gate
-    # round 5): when HERMES_HOME (or the config parent) is a symlink alias,
-    # lexical equality fails and an authoritative HERMES_CONFIG_PATH inside
-    # the aliased home would be bypassed in favor of a direct — wrong — read.
-    target = _cfg_safe_resolve(target)
-    try:
-        from api.profiles import get_active_hermes_home
-
-        if _cfg_safe_resolve(Path(get_active_hermes_home()).expanduser()) == target:
-            return get_config()
-    except Exception:
-        pass
-    # If the ambient resolver already points at this profile home, defer to
-    # get_config() so in-memory overrides (monkeypatched cfg) are honored. This
-    # MUST run before the nonexistent-home guard below: a matching ambient home
-    # whose directory doesn't physically exist yet (fresh install, monkeypatched
-    # cfg) must still resolve through get_config(), not return {} (#4516 gate).
-    try:
-        if _cfg_safe_resolve(_get_config_path().parent) == target:
-            return get_config()
-    except Exception:
-        pass
-    if not target.exists():
-        return {}
-    # Read the profile file directly and apply documented defaults locally so the
-    # returned dict matches ambient get_config() shape (including built-in
-    # personalities) without mutating any global cache state.
-    profile_cfg = _load_yaml_config_file(target / "config.yaml")
-    _apply_config_defaults(profile_cfg)
-    return profile_cfg
+# ── Config cache + reload (split: api/_cfg/config_store.py) ───────────
+# Canonical implementations live in api/_cfg/config_store.py; re-exported here
+# so ``from api.config import _cfg_cache`` keeps working and the dict
+# identity is preserved for ``config._cfg_cache is config.cfg`` in tests.
+# Scalar globals (_cfg_mtime/_cfg_path/_cfg_fingerprint) live in the store
+# module; we proxy attribute access so ``cfg._cfg_mtime`` always reflects the
+# store's current value (``from import`` copies a scalar, so re-importing it
+# here would go stale on reassignment — PEP 562 __getattr__ fixes that).
+from api._cfg.config_store import (  # noqa: F401
+    _WEBUI_SESSION_SAVE_MODES,
+    _DEFAULT_WEBUI_SESSION_SAVE_MODE,
+    _DEFAULT_EXPERIMENTAL_CONFIG,
+    _DEFAULT_AGENT_PERSONALITIES,
+    _cfg_cache,
+    _cfg_lock,
+    _fingerprint_config,
+    _cfg_has_in_memory_overrides,
+    _get_config_path,
+    _apply_config_defaults,
+    reload_config_if_stale,
+    get_config,
+    get_config_snapshot,
+    get_webui_session_save_mode,
+    is_unified_session_db_enabled,
+    _refresh_config_cache,
+    reload_config,
+    get_config_for_profile_home,
+)
 
 
-# Initial load
-reload_config()
+# PEP 562 alone can't proxy *writes* (``config._cfg_mtime = 0`` just puts a
+# shadow entry in ``config.__dict__``).  Tests do exactly that to suspend the
+# mtime guard, and the engine writes the same scalars via
+# ``_refresh_config_cache`` in the store module.  Turn the module object
+# itself into a tiny proxy type so both sides share one canonical store.
+import sys as _sys
+import types as _types
+
+
+class _ConfigModule(_types.ModuleType):
+    def __getattr__(self, name: str):  # type: ignore[override]
+        if name in {"_cfg_mtime", "_cfg_path", "_cfg_fingerprint", "_effective_config_path"}:
+            import api._cfg.config_store as _cs
+
+            return getattr(_cs, name)
+        raise AttributeError(f"module 'api.config' has no attribute {name!r}")
+
+    def __setattr__(self, name: str, value) -> None:  # type: ignore[override]
+        if name in {"_cfg_mtime", "_cfg_path", "_cfg_fingerprint"}:
+            import api._cfg.config_store as _cs
+
+            setattr(_cs, name, value)
+            return
+        super().__setattr__(name, value)
+
+    def __dir__(self):  # type: ignore[override]
+        import api._cfg.config_store as _cs
+
+        return sorted(set(super().__dir__()) | {"_cfg_mtime", "_cfg_path", "_cfg_fingerprint", "_effective_config_path"} | set(dir(_cs)))
+
+
+_sys.modules[__name__].__class__ = _ConfigModule
+# Also patch the already-created instance's __class__ for this execution
+try:
+    import api.config as _self_proxy  # noqa: F401
+
+    _self_proxy.__class__ = _ConfigModule  # type: ignore[attr-defined]
+except Exception:
+    pass
+
 cfg = _cfg_cache  # alias for backward compat with existing references
+# Initial load — must run after both re-exports so _refresh_config_cache can
+# resolve _ac._load_yaml_config_file_raw and _ac._expand_env_vars.
+reload_config()
 
 
 # ── Default workspace discovery (split: api/_cfg/workspace.py) ─────────────────
