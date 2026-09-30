@@ -57,12 +57,12 @@ def _lazy_is_ambient_gh_cli_entry(*a, **kw):
 
 def _credential_pool_cache_ref():
     import api.config as _ac
-    return getattr(_ac, "_CREDENTIAL_POOL_CACHE")
+    return _ac._CREDENTIAL_POOL_CACHE
 
 def _lazy_thread_ctx():
     try:
         import api.config as _ac
-        return getattr(_ac, "_thread_ctx")
+        return _ac._thread_ctx
     except Exception:
         import threading
         return threading.local()

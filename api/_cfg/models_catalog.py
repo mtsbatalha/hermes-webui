@@ -6,29 +6,15 @@ No external module should import from api._cfg.models_catalog directly.
 
 from __future__ import annotations
 
-import collections
 import copy
-import hashlib
 import json
 import logging
-import math
 import os
-import queue
-import re
-import socket
-import sys
 import threading
 import time
-import traceback
-import urllib.error
-import urllib.request
-import uuid
-import weakref
 from pathlib import Path
-from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
-import api.paths as _paths
 
 logger = logging.getLogger(__name__)
 def _models_from_live_provider_ids(provider_id: str, live_ids: list[str]) -> list[dict]:
@@ -870,7 +856,9 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 # Fallback: check credential pool for both api_key and base_url
                 if (not _cp_api_key or not _cp_base_url) and _slug:
                     try:
-                        from api.config import _has_explicit_pool_credentials
+                        # imported for side-effect check; real call uses _ac alias
+                        import api.config as _unused_pool_check  # noqa: F401
+
                         if _ac._has_explicit_pool_credentials(_slug):
                             from agent.credential_pool import load_pool
                             _resolved = _ac._resolve_provider_alias(_slug)
@@ -1707,7 +1695,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
 
         # Reload config if changed
         if _cfg_changed:
-            reload_config()
+            _ac.reload_config()
             _ac._available_models_cache = None
             _ac._available_models_cache_ts = 0.0
             _ac._available_models_live_rebuild_ts = 0.0

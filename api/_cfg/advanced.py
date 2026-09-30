@@ -85,7 +85,7 @@ def _save_yaml(path, data) -> None:
 def _cfg_lock_cm():
     try:
         import api.config as _ac
-        return getattr(_ac, "_cfg_lock")
+        return _ac._cfg_lock
     except Exception:
         return threading.Lock()
 

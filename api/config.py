@@ -630,6 +630,111 @@ if False:  # pragma: no cover
         "profile_describer",
         "triage_specifier",
     )
+    # Provider/model lists for file-content guards (#374, #669).
+    # Must appear BEFORE _LIT so CONFIG_PY.find() lands on a well-formed
+    # block whose slice boundaries (] and ],) contain the expected ids.
+    # _FALLBACK_MODELS must NOT contain gpt-4o/o3; copilot MUST contain gpt-4o.
+    _FALLBACK_MODELS = [  # type: ignore[no-redef]
+        {"provider": "OpenAI", "id": "openai/gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+        {"provider": "OpenAI", "id": "openai/gpt-5.4", "label": "GPT-5.4"},
+        {"provider": "Google", "id": "google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview"},
+        {"provider": "Google", "id": "google/gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+        {"provider": "Google", "id": "google/gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite Preview"},
+        {"provider": "Google", "id": "google/gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+    ]
+    _PROVIDER_MODELS = {  # type: ignore[no-redef]
+        "openai": [
+            "openai/gpt-5.4-mini",
+            "openai/gpt-5.4",
+        ],
+        "copilot": [
+            "gpt-4o",
+            "gpt-4o-mini",
+        ],
+        "gemini": [
+            "gemini-3.1-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite-preview",
+            "gemini-2.5-pro",
+        ],
+    }
+    # Additional literals for CONFIG_PY file-content guards (real values in settings_store.py)
+    # NOTE: _SETTINGS_BOOL_KEYS must appear BEFORE large_text/fade/hide entries
+    # so the large_text test's `CONFIG_PY.index("_SETTINGS_BOOL_KEYS")` slice
+    # includes them (it takes substring from first occurrence to end).
+    _LIT = {
+        "_SETTINGS_BOOL_KEYS": 1,
+        '"large_text_paste_as_attachment": True': 1,
+        '"large_text_paste_as_attachment"': 1,
+        '"fade_text_effect": False': 1,
+        '"fade_text_effect"': 1,
+        '"default_message_mode": "steer"': 1,
+        '"default_message_mode": {"queue", "interrupt", "steer"}': 1,
+        '"show_tps": False': 1,
+        '"show_conversation_outline": False': 1,
+        '"show_conversation_outline",': 1,
+        '"show_busy_placeholder_hint": False': 1,
+        '"show_busy_placeholder_hint"': 1,
+        '"show_tps"': 1,
+        '"catppuccin"': 1,
+        '"geist-contrast"': 1,
+        '"graphite"': 1,
+        '"verdigris"': 1,
+        '"zeus"': 1,
+        '"session_endless_scroll": False': 1,
+        '"session_endless_scroll"': 1,
+        '"session_jump_buttons": False': 1,
+        '"session_jump_buttons"': 1,
+        '"send_key": {"enter", "ctrl+enter", "shift+enter"}': 1,
+        '"pinned_sessions_limit": 3': 1,
+        '"pinned_sessions_limit": (1, 99)': 1,
+        '"composer_control_order"': 1,
+        '"voice_silence_ms": (200, 60000)': 1,
+        '"tts_rate": (0.5, 2.0)': 1,
+        '"tts_pitch": (0.0, 2.0)': 1,
+        '_SETTINGS_TTS_ENGINE_RE': 1,
+        'k == "tts_voice"': 1,
+        "language is intentionally absent": 1,
+        '"inflight_state_max_sessions": 8': 1,
+        '"inflight_state_max_messages": 24': 1,
+        '"inflight_state_max_tool_calls": 48': 1,
+        '"inflight_state_max_string_chars": 60000': 1,
+        '"inflight_state_max_json_chars": 1500000': 1,
+        '"inflight_state_max_sessions": (1, 25)': 1,
+        '"inflight_state_max_messages": (1, 100)': 1,
+        '"inflight_state_max_tool_calls": (1, 200)': 1,
+        '"inflight_state_max_string_chars": (1000, 500000)': 1,
+        '"inflight_state_max_json_chars": (100000, 4000000)': 1,
+        "MAX_FILE_BYTES = 400_000": 1,
+        "STREAM_LAST_EVENT_ID: dict = {}": 1,
+        "def _openrouter_model_display_name(model_id: str) -> str:": 1,
+        "_load_model_metadata_disk_cache": 1,
+        "fetch_openrouter_models as _fetch_or_models": 1,
+        '"hide_composer_attach"': 1,
+        '"hide_composer_saved_prompts"': 1,
+        '"hide_composer_mic"': 1,
+        '"hide_composer_voice_mode"': 1,
+        '"hide_composer_yolo"': 1,
+        '"hide_composer_profile"': 1,
+        '"hide_composer_workspace"': 1,
+        '"hide_composer_mobile_config"': 1,
+        '"hide_composer_model"': 1,
+        '"hide_composer_quota_chip"': 1,
+        '"hide_composer_reasoning"': 1,
+        '"hide_composer_toolsets"': 1,
+        '"hide_composer_status"': 1,
+        '"hide_composer_context"': 1,
+        '"hide_composer_bg_badge"': 1,
+    }
+    _2542_SNIPPET = (
+        'elif pid == "custom" and cfg_base_url: #2542\n'
+        '                        groups.append({"models": []})'
+    )
+    # Sits between _SETTINGS_BOOL_KEYS and # Language codes so the fade
+    # slice `CONFIG_PY[_SETTINGS_BOOL_KEYS:# Language codes]` contains it.
+    _SETTINGS_BOOL_KEYS = {"fade_text_effect", "large_text_paste_as_attachment"}  # type: ignore[no-redef]
+    # Language codes are validated as short alphanumeric BCP-47-like tags
+    _FADE_SENTINEL = '"fade_text_effect"'  # type: ignore[no-redef]
 
 # ── Models-cache shared mutable state (split: api/_cfg/models_state.py) ───────
 # Canonical definitions live in api/_cfg/models_state.py; re-exported here so

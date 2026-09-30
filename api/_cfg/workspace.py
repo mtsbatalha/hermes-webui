@@ -8,7 +8,36 @@ No external module should import from ``api._cfg.workspace`` directly.
 import os
 from pathlib import Path
 
-from api._cfg.state import HOME, STATE_DIR
+import api._cfg.state as _state_mod
+
+# HOME/STATE_DIR must reflect monkeypatch on api.config (tests do
+# monkeypatch.setattr(api.config, "STATE_DIR", ...)). Importing directly
+# from api._cfg.state freezes the value, so we proxy at call time via
+# api.config when available.  Module-level aliases are kept for
+# ``from api._cfg.workspace import HOME`` but internal logic uses helpers.
+from api._cfg.state import HOME as _HOME_FALLBACK  # noqa: F401
+from api._cfg.state import STATE_DIR as _STATE_DIR_FALLBACK  # noqa: F401
+
+HOME = _HOME_FALLBACK
+STATE_DIR = _STATE_DIR_FALLBACK
+
+
+def _home() -> Path:
+    try:
+        import api.config as _ac  # type: ignore[import-not-found]
+
+        return _ac.HOME  # type: ignore[attr-defined]
+    except Exception:
+        return _state_mod.HOME
+
+
+def _state_dir() -> Path:
+    try:
+        import api.config as _ac  # type: ignore[import-not-found]
+
+        return _ac.STATE_DIR  # type: ignore[attr-defined]
+    except Exception:
+        return _state_mod.STATE_DIR
 
 
 def _workspace_candidates(raw: str | Path | None = None) -> list[Path]:
@@ -29,15 +58,15 @@ def _workspace_candidates(raw: str | Path | None = None) -> list[Path]:
     if os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"):
         add(os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"))
 
-    home_workspace = HOME / "workspace"
-    home_work = HOME / "work"
+    home_workspace = _home() / "workspace"
+    home_work = _home() / "work"
     if home_workspace.exists():
         add(home_workspace)
     if home_work.exists():
         add(home_work)
 
     add(home_workspace)
-    add(STATE_DIR / "workspace")
+    add(_state_dir() / "workspace")
     return candidates
 
 

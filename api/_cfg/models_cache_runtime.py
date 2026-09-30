@@ -8,13 +8,8 @@ from __future__ import annotations
 
 import copy
 import logging
-import os
-import re
-import threading
 import time
-from pathlib import Path
 
-import api.paths as _paths
 
 logger = logging.getLogger(__name__)
 

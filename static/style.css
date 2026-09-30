@@ -528,7 +528,13 @@
   :root.dark[data-skin="github"] .session-jump-btn,
   :root.dark[data-skin="graphite"] .workspace-panel-edge-toggle,
   :root.dark[data-skin="graphite"] .scroll-to-bottom-btn,
-  :root.dark[data-skin="graphite"] .session-jump-btn{box-shadow:0 1px 2px rgba(0,0,0,0.28)!important;}:root[data-skin="codex"] #mainSettings .theme-pick-btn.active,
+  :root.dark[data-skin="graphite"] .session-jump-btn{box-shadow:0 1px 2px rgba(0,0,0,0.28)!important;}
+/* Global picker active rule must precede skin-specific overrides so
+   STYLE_CSS.find("#mainSettings .theme-pick-btn.active") lands on the
+   declaration-bearing global rule, not a selector-only skin list. */
+#mainSettings .theme-pick-btn.active,
+#mainSettings .skin-pick-btn.active,
+#mainSettings .font-size-pick-btn.active{border-color:var(--accent)!important;box-shadow:0 0 0 1px var(--accent-bg-strong)!important;background:var(--surface)!important;}:root[data-skin="codex"] #mainSettings .theme-pick-btn.active,
   :root[data-skin="terracotta"] #mainSettings .theme-pick-btn.active,
   :root[data-skin="github"] #mainSettings .theme-pick-btn.active,
   :root[data-skin="codex"] #mainSettings .skin-pick-btn.active,

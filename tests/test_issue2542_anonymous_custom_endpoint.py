@@ -6,10 +6,11 @@ is still added to the picker with an empty model list so the user can type
 a model ID manually (#2542).
 """
 
+import pathlib
 import re
 
-REPO = __file__.rsplit("/", 2)[-3] if "/" in __file__ else "."
-CONFIG_PY = open(f"{REPO}/api/config.py").read() if REPO != "." else ""
+REPO = pathlib.Path(__file__).resolve().parents[1]
+CONFIG_PY = (REPO / "api" / "config.py").read_text(encoding="utf-8")
 
 
 def test_custom_anonymous_endpoint_empty_models_fallback_in_get_available_models():

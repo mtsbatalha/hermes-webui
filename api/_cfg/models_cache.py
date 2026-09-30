@@ -6,16 +6,13 @@ keeps working.  No external module should import from ``api._cfg.models_cache`` 
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import logging
 import os
 import re
-import time
 from pathlib import Path
 
-import api.paths as _paths
 from api._cfg.state import HOME, STATE_DIR, _DEFAULT_HERMES_HOME
 from api._cfg.providers_catalog import _PROVIDER_DISPLAY, _PROVIDER_MODELS
 

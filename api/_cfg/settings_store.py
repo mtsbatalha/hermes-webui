@@ -11,11 +11,9 @@ import logging
 import math
 import os
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
-import api.paths as _paths
 
 logger = logging.getLogger(__name__)
 

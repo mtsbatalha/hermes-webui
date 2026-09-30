@@ -9,12 +9,8 @@ from __future__ import annotations
 import copy
 import json
 import logging
-import os
-import re
-from pathlib import Path
 
-import api.paths as _paths
-from api._cfg.state import HOME, _DEFAULT_HERMES_HOME
+from api._cfg.state import _DEFAULT_HERMES_HOME
 
 logger = logging.getLogger(__name__)
 
