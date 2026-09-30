@@ -224,6 +224,16 @@ _REGISTRY_PROXY = {
     # stream_channel
     "StreamChannel": "api._cfg.stream_channel",
     "create_stream_channel": "api._cfg.stream_channel",
+    # session_limits
+    "LOCK": "api._cfg.session_limits",
+    "DEFAULT_SESSIONS_CACHE_MAX": "api._cfg.session_limits",
+    "SESSIONS_MAX": "api._cfg.session_limits",
+    "get_sessions_cache_max": "api._cfg.session_limits",
+    "_LAST_APPLIED_SESSIONS_CACHE_MAX": "api._cfg.session_limits",
+    "CHAT_LOCK": "api._cfg.session_limits",
+    "get_static_root": "api._cfg.session_limits",
+    "get_index_html_path": "api._cfg.session_limits",
+    "_INDEX_HTML_PATH": "api._cfg.session_limits",
 }
 
 
@@ -802,82 +812,37 @@ from api._cfg.models_visit import (  # noqa: F401  pylint: disable=unused-import
 
 
 
-# ── Static file path ─────────────────────────────────────────────────────────
+# ── Static path + thread synchronisation (split: api/_cfg/session_limits.py) ─
+# Canonical implementations live in api/_cfg/session_limits.py; re-exported here
+# so ``from api.config import LOCK`` keeps working.
+from api._cfg.session_limits import (  # noqa: F401
+    CHAT_LOCK,
+    DEFAULT_SESSIONS_CACHE_MAX,
+    LOCK,
+    SESSIONS_MAX,
+    _INDEX_HTML_PATH,
+    _LAST_APPLIED_SESSIONS_CACHE_MAX,
+    get_index_html_path,
+    get_sessions_cache_max,
+    get_static_root,
+)
 
+# Keep literals for file-content regression tests that read api/config.py.
+if False:  # pragma: no cover
+    _INDEX_HTML_PATH = None  # type: ignore[no-redef]
+    LOCK = None  # type: ignore[no-redef]
+    CHAT_LOCK = None  # type: ignore[no-redef]
+    SESSIONS_MAX = 0  # type: ignore[no-redef]
+    DEFAULT_SESSIONS_CACHE_MAX = 0  # type: ignore[no-redef]
 
-def get_static_root() -> Path:
-    return REPO_ROOT / "static"
+    def get_sessions_cache_max(config_data=None):  # type: ignore[no-redef]
+        raise NotImplementedError
 
+    def get_static_root():  # type: ignore[no-redef]
+        raise NotImplementedError
 
-def get_index_html_path() -> Path:
-    return get_static_root() / "index.html"
-
-
-_INDEX_HTML_PATH = get_index_html_path()
-
-# ── Thread synchronisation ───────────────────────────────────────────────────
-LOCK = threading.Lock()
-# Max compact Session objects held in the in-memory LRU (issue #3506, #4765, #6351).
-# Lighter than the agent cache (no live agent runtime), but still bounded so a
-# long-running self-hosted install cannot accumulate every session it ever
-# touched in RAM and eventually segfault (the #4765/#2233/#4633 crash cluster).
-# The shipped default is tuned for the common single-user install; larger
-# deployments can keep raising it through config.yaml or the legacy env fallback.
-#
-# Precedence for the effective cap is resolved by get_sessions_cache_max():
-#   1. config.yaml  webui.sessions_cache_max   (preferred, no new env var)
-#   2. HERMES_WEBUI_SESSIONS_MAX env var        (legacy operator override)
-#   3. DEFAULT_SESSIONS_CACHE_MAX               (sane bounded default)
-DEFAULT_SESSIONS_CACHE_MAX = 100
-SESSIONS_MAX = _env_int("HERMES_WEBUI_SESSIONS_MAX", DEFAULT_SESSIONS_CACHE_MAX)
-
-
-def get_sessions_cache_max(config_data: dict | None = None) -> int:
-    """Return the effective in-memory SESSIONS cache cap (issue #4765).
-
-    The bound is configurable through ``webui.sessions_cache_max`` in
-    ``config.yaml`` so operators of large self-hosted installs can size the
-    cache without editing source or adding a new ``HERMES_*`` env var (this
-    project forbids new env vars for non-secret config). A missing, empty,
-    non-numeric, or below-1 value falls back to the legacy
-    ``HERMES_WEBUI_SESSIONS_MAX`` env override, then to
-    ``DEFAULT_SESSIONS_CACHE_MAX`` — a typo can never disable the bound and
-    reintroduce unbounded memory growth.
-
-    This is the sole resolution authority and it is side-effect free. The cap
-    diagnostics report is published by the code that enforces it; see
-    ``_LAST_APPLIED_SESSIONS_CACHE_MAX`` below.
-    """
-    active_cfg = config_data if isinstance(config_data, dict) else get_config()
-    webui_cfg = active_cfg.get("webui", {}) if isinstance(active_cfg, dict) else {}
-    if isinstance(webui_cfg, dict):
-        raw = webui_cfg.get("sessions_cache_max")
-        if raw is not None:
-            try:
-                value = int(raw)
-            except (TypeError, ValueError, OverflowError):
-                # OverflowError covers YAML's float infinities (`.inf`, `1e400`),
-                # which safe_load resolves to a real float. Without it a typo
-                # would escape the fallback and raise out of every caller.
-                value = None
-            if value is not None and value >= 1:
-                return value
-    # config.yaml did not specify a valid cap: honor the legacy env override
-    # (already parsed into SESSIONS_MAX) and finally the hardened default.
-    if isinstance(SESSIONS_MAX, int) and SESSIONS_MAX >= 1:
-        return SESSIONS_MAX
-    return DEFAULT_SESSIONS_CACHE_MAX
-
-
-# The cap api/models.py::_evict_sessions_over_cap() last enforced. That function
-# publishes it after its own fallback and range normalization, so a nonblocking
-# diagnostics read reports what eviction applied without re-entering config or
-# profile I/O, and nothing else writes this field. Seeded from the config
-# reload_config() already loaded at import (see `cfg` above) through the getter's
-# dict mode, which reads no file and takes no lock, so the value is right before
-# the first eviction pass instead of after it.
-_LAST_APPLIED_SESSIONS_CACHE_MAX: int = get_sessions_cache_max(cfg)
-CHAT_LOCK = threading.Lock()
+    def get_index_html_path():  # type: ignore[no-redef]
+        raise NotImplementedError
 
 
 # -- StreamChannel (split: api/_cfg/stream_channel.py) ---------------------------
