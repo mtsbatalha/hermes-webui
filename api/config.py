@@ -65,39 +65,22 @@ TLS_CERT = os.getenv("HERMES_WEBUI_TLS_CERT", "").strip() or None
 TLS_KEY = os.getenv("HERMES_WEBUI_TLS_KEY", "").strip() or None
 TLS_ENABLED = TLS_CERT is not None and TLS_KEY is not None
 
-# ── State directory (env-overridable, never inside repo) ──────────────────────
-_DEFAULT_HERMES_HOME = _platform_default_hermes_home()
-_DEFAULT_STATE_HOME = Path(os.getenv("HERMES_HOME") or _DEFAULT_HERMES_HOME).expanduser()
-
-STATE_DIR = (
-    Path(os.getenv("HERMES_WEBUI_STATE_DIR", str(_DEFAULT_STATE_HOME / "webui")))
-    .expanduser()
-    .resolve()
+# ── State directory (split: canonical defs in api/_cfg/state.py) ──────────────
+from api._cfg.state import (  # noqa: F401
+    CUSTOM_MODELS_ENDPOINT_TIMEOUT_SECONDS,
+    LAST_WORKSPACE_FILE,
+    PROJECTS_FILE,
+    SESSION_DIR,
+    SESSION_INDEX_FILE,
+    SETTINGS_FILE,
+    STATE_DIR,
+    WORKSPACES_FILE,
+    _DEFAULT_HERMES_HOME,
+    _DEFAULT_STATE_HOME,
+    _resolve_settings_file,
 )
 
-
-def _resolve_settings_file(state_dir: Path) -> Path:
-    """Resolve an optional per-instance settings file without splitting session state."""
-    configured = os.getenv("HERMES_WEBUI_SETTINGS_FILE", "").strip()
-    if configured:
-        return Path(configured).expanduser().resolve()
-    return state_dir / "settings.json"
-
-
-SESSION_DIR = STATE_DIR / "sessions"
-WORKSPACES_FILE = STATE_DIR / "workspaces.json"
-SESSION_INDEX_FILE = SESSION_DIR / "_index.json"
-SETTINGS_FILE = _resolve_settings_file(STATE_DIR)
-LAST_WORKSPACE_FILE = STATE_DIR / "last_workspace.txt"
-PROJECTS_FILE = STATE_DIR / "projects.json"
-
 logger = logging.getLogger(__name__)
-
-# Keep custom provider /v1/models probes below the frontend's generic request
-# timeout even when one upstream is slow or unreachable. The models cache rebuild
-# path probes configured custom endpoints serially, so each provider needs a
-# short hard cap and graceful degradation.
-CUSTOM_MODELS_ENDPOINT_TIMEOUT_SECONDS = 5.0
 
 
 # _env_mb_bytes now imported from api._cfg.env (see top of file)
@@ -124,30 +107,9 @@ from api._cfg.thread_env import (  # noqa: F401
 
 
 # ── Config file (reloadable -- supports profile switching) ──────────────────
-
-def _expand_env_vars(obj):
-    """Recursively expand ${VAR} references in config values.
-
-    Uses the thread-local-first profile env lookup (_thread_local_env_value) so a
-    ${VAR} reference in a profile's config.yaml resolves to that profile's value,
-    and — critically — does NOT fall back to the server process os.environ when a
-    profile-scoped readonly/background scope set block_process_env_fallback. The
-    raw (unexpanded) dict is what gets cached; this expansion re-runs on every
-    read against the current thread's scope, so a cross-profile credential
-    (e.g. config api_key: ${ANTHROPIC_TOKEN}) can't be reconstructed from the
-    server process env for a named profile that has no such value (#3961)."""
-    if isinstance(obj, str):
-        return re.sub(
-            r"\${([^}]+)}",
-            lambda m: _thread_local_env_value(m.group(1), m.group(0)),
-            obj,
-        )
-    if isinstance(obj, dict):
-        return {k: _expand_env_vars(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_expand_env_vars(item) for item in obj]
-    return obj
-
+# _expand_env_vars is imported from api._cfg.thread_env (see Agent discovery header above);
+# the duplicate def that was here has been removed — the re-exported one from
+# thread_env.py is byte-identical.
 
 _cfg_cache = {}
 _cfg_lock = threading.Lock()
@@ -628,75 +590,15 @@ reload_config()
 cfg = _cfg_cache  # alias for backward compat with existing references
 
 
-# ── Default workspace discovery ───────────────────────────────────────────────
-def _workspace_candidates(raw: str | Path | None = None) -> list[Path]:
-    """Return ordered candidate workspace paths, de-duplicated."""
-    candidates: list[Path] = []
-
-    def add(candidate: str | Path | None) -> None:
-        if candidate in (None, ""):
-            return
-        try:
-            path = Path(candidate).expanduser().resolve()
-        except Exception:
-            return
-        if path not in candidates:
-            candidates.append(path)
-
-    add(raw)
-    if os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"):
-        add(os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"))
-
-    home_workspace = HOME / "workspace"
-    home_work = HOME / "work"
-    if home_workspace.exists():
-        add(home_workspace)
-    if home_work.exists():
-        add(home_work)
-
-    add(home_workspace)
-    add(STATE_DIR / "workspace")
-    return candidates
-
-
-
-def _ensure_workspace_dir(path: Path) -> bool:
-    """Best-effort check that a workspace directory exists and is writable."""
-    try:
-        path = path.expanduser().resolve()
-        path.mkdir(parents=True, exist_ok=True)
-        return path.is_dir() and os.access(path, os.R_OK | os.W_OK | os.X_OK)
-    except Exception:
-        return False
-
-
-
-def resolve_default_workspace(raw: str | Path | None = None) -> Path:
-    """Return the first usable workspace path, creating it when possible."""
-    for candidate in _workspace_candidates(raw):
-        if _ensure_workspace_dir(candidate):
-            return candidate
-    raise RuntimeError(
-        "Could not create or access any usable workspace directory. "
-        "Set HERMES_WEBUI_DEFAULT_WORKSPACE to a writable path."
-    )
-
-
-
-def _discover_default_workspace() -> Path:
-    """
-    Resolve the default workspace in order:
-      1. HERMES_WEBUI_DEFAULT_WORKSPACE env var
-      2. ~/workspace if it already exists
-      3. ~/work if it already exists
-      4. ~/workspace (create if needed)
-      5. STATE_DIR / workspace
-    """
-    return resolve_default_workspace()
-
-
-DEFAULT_WORKSPACE = _discover_default_workspace()
-DEFAULT_MODEL = os.getenv("HERMES_WEBUI_DEFAULT_MODEL", "")  # Empty = use provider default; avoids showing unavailable OpenAI model to non-OpenAI users (#646)
+# ── Default workspace discovery (split: api/_cfg/workspace.py) ─────────────────
+from api._cfg.workspace import (  # noqa: F401
+    DEFAULT_MODEL,
+    DEFAULT_WORKSPACE,
+    _discover_default_workspace,
+    _ensure_workspace_dir,
+    _workspace_candidates,
+    resolve_default_workspace,
+)
 
 
 # ── Startup diagnostics ───────────────────────────────────────────────────────
