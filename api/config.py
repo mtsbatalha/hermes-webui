@@ -400,80 +400,18 @@ def reload_config() -> None:
         _refresh_config_cache(_get_config_path())
 
 
-# Memoized parse cache for _load_yaml_config_file, keyed on (resolved path,
-# st_mtime_ns, st_size). yaml.safe_load on an ~800-line / 24KB config.yaml costs
-# ~125ms of pure-Python parsing, and hot read paths (e.g. GET /api/reasoning ->
-# get_reasoning_status) call this on every request. Without a cache, a UI sync
-# storm turns into a YAML-reparse storm (#4650). We cache the RAW parsed dict and
-# re-run _expand_env_vars() on every call: env expansion is cheap, always returns
-# a fresh structure (so callers that read-modify-save the result never corrupt the
-# cache), and keeps ${VAR} references live against the current os.environ. The
-# (mtime_ns, size) key means any on-disk edit (including by _save_yaml_config_file)
-# is picked up on the next read.
-_yaml_file_cache: dict[str, tuple] = {}
-_yaml_file_cache_lock = threading.Lock()
-
-
-def _load_yaml_config_file_raw(config_path: Path, *, _copy: bool = True) -> dict:
-    """Return the RAW (un-env-expanded) parsed config dict, memoized on
-    (resolved path, st_mtime_ns, st_size). Shared parse core for
-    _load_yaml_config_file() and reload_config(): the former runs the helper's
-    own per-call env expansion on the result; the latter must run expansion
-    under its own process-env-pinned thread context (#798), so it takes the raw
-    dict and expands it itself. Either way the file is parsed at most once per
-    (mtime, size) — a UI sync storm can't turn into a YAML-reparse storm (#4650),
-    and an unchanged config.yaml isn't reparsed on the profile-switch hot path
-    (#4662 Phase 2).
-
-    By default returns a deep copy so a caller can never mutate the shared cache
-    entry (greptile #4741). Internal callers that immediately pass the result
-    through _expand_env_vars() (which itself returns a fresh structure and never
-    mutates its input) pass _copy=False to skip the redundant copy on the hot path.
-    """
-    try:
-        from api import yaml_compat as _yaml
-    except ImportError:
-        return {}
-
-    try:
-        st = config_path.stat()
-    except OSError:
-        # Missing or unstattable file — preserve the original "no config" contract.
-        return {}
-
-    cache_key = str(config_path)
-    stat_key = (st.st_mtime_ns, st.st_size)
-    with _yaml_file_cache_lock:
-        cached = _yaml_file_cache.get(cache_key)
-        if cached is not None and cached[0] == stat_key:
-            raw = cached[1]
-            if not isinstance(raw, dict):
-                return {}
-            return copy.deepcopy(raw) if _copy else raw
-
-    # Cache miss / stale: parse off disk. Done outside the lock so a slow parse
-    # doesn't serialize unrelated paths; a concurrent duplicate parse is harmless.
-    try:
-        loaded = _yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except Exception:
-        logger.debug("Failed to parse yaml config from %s", config_path)
-        return {}
-
-    raw = loaded if isinstance(loaded, dict) else {}
-    with _yaml_file_cache_lock:
-        _yaml_file_cache[cache_key] = (stat_key, raw)
-    return copy.deepcopy(raw) if _copy else raw
-
-
-def _load_yaml_config_file(config_path: Path) -> dict:
-    # _copy=False: _expand_env_vars returns a fresh structure and never mutates
-    # its input, so the env-expanded result is already cache-safe — no need to
-    # deep-copy the raw dict first (keeps the /api/reasoning hot path cheap).
-    raw = _load_yaml_config_file_raw(config_path, _copy=False)
-    if not raw:
-        return {}
-    expanded = _expand_env_vars(raw)
-    return expanded if isinstance(expanded, dict) else {}
+# ── YAML memoization (split: api/_cfg/yaml_cache.py) ─────────────────────────
+# Canonical implementations live in api/_cfg/yaml_cache.py; re-exported here so
+# ``from api.config import _yaml_file_cache`` keeps working and the dict
+# identity is preserved for ``config._yaml_file_cache.clear()`` in tests.
+from api._cfg.yaml_cache import (  # noqa: F401
+    _config_for_yaml_save,
+    _load_yaml_config_file,
+    _load_yaml_config_file_raw,
+    _save_yaml_config_file,
+    _yaml_file_cache,
+    _yaml_file_cache_lock,
+)
 
 
 def get_config_for_profile_home(profile_home: "Path | str | None") -> dict:
