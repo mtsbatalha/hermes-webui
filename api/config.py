@@ -731,58 +731,21 @@ MAX_UPLOAD_BYTES = _env_mb_bytes("HERMES_WEBUI_MAX_UPLOAD_MB", 100)
 # ``api/config.py`` remains the public surface.
 from api._cfg.filetypes import CODE_EXTS, IMAGE_EXTS, MD_EXTS, MIME_MAP  # noqa: F401
 
-# ── Toolsets (from config.yaml or hardcoded default) ─────────────────────────
-_DEFAULT_TOOLSETS = [
-    "browser",
-    "clarify",
-    "code_execution",
-    "cronjob",
-    "delegation",
-    "file",
-    "image_gen",
-    "memory",
-    "session_search",
-    "skills",
-    "terminal",
-    "todo",
-    "web",
-    "webhook",
-]
-
-_LEGACY_CLI_TOOLSET_ALIASES = {
-    # Older Hermes configs used "hermes" as the CLI composite toolset. Modern
-    # Hermes Agent exposes that split as these two registered composites; keep
-    # WebUI sessions usable when pointed at an older shared config.yaml.
-    "hermes": ("hermes-cli", "hermes-api-server"),
-}
-
-
-def _normalize_cli_toolsets(toolsets):
-    """Expand legacy CLI toolset aliases while preserving order and de-duping."""
-    normalized = []
-    seen = set()
-    for name in toolsets or []:
-        replacements = _LEGACY_CLI_TOOLSET_ALIASES.get(name, (name,))
-        for replacement in replacements:
-            if replacement and replacement not in seen:
-                seen.add(replacement)
-                normalized.append(replacement)
-    return normalized
-
-
-def _resolve_cli_toolsets(cfg=None):
-    """Resolve CLI toolsets using the agent's _get_platform_tools() so that
-    MCP server toolsets are automatically included, matching CLI behaviour."""
-    if cfg is None:
-        cfg = get_config()
-    try:
-        from hermes_cli.tools_config import _get_platform_tools
-        return _normalize_cli_toolsets(_get_platform_tools(cfg, "cli"))
-    except Exception:
-        # Fallback: read raw list from config (MCP toolsets will be missing)
-        return _normalize_cli_toolsets(cfg.get("platform_toolsets", {}).get("cli", _DEFAULT_TOOLSETS))
-
-CLI_TOOLSETS = _resolve_cli_toolsets()
+# Toolsets (split: api/_cfg/toolsets.py) --------------------------------------------------------
+# Canonical definitions live in api/_cfg/toolsets.py; re-exported here.
+from api._cfg.toolsets import (  # noqa: F401
+    _DEFAULT_TOOLSETS,
+    _LEGACY_CLI_TOOLSET_ALIASES,
+    _normalize_cli_toolsets,
+    _resolve_cli_toolsets,
+)
+# CLI_TOOLSETS is recomputed after get_config() is defined (see after
+# the reload_config block) so _resolve_cli_toolsets() can call it
+# without a forward-reference NameError.  Seed with defaults here so
+# the name exists during module init; the helper import stays alive.
+_CLI_TOOLSETS_RESOLVER = _resolve_cli_toolsets  # capture before shadowing
+CLI_TOOLSETS: list[str] = list(_DEFAULT_TOOLSETS)
+CLI_TOOLSETS = _CLI_TOOLSETS_RESOLVER()  # final: recompute with live get_config()
 
 # ── Model / provider discovery ───────────────────────────────────────────────
 
