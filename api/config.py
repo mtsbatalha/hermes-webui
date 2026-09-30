@@ -234,6 +234,11 @@ _REGISTRY_PROXY = {
     "get_static_root": "api._cfg.session_limits",
     "get_index_html_path": "api._cfg.session_limits",
     "_INDEX_HTML_PATH": "api._cfg.session_limits",
+    # runtime_diag
+    "SESSIONS": "api._cfg.runtime_diag",
+    "get_runtime_diagnostics_snapshot": "api._cfg.runtime_diag",
+    # startup_settings
+    "_startup_settings": "api._cfg.startup_settings",
 }
 
 
@@ -930,6 +935,7 @@ from api._cfg.process_wakeup import (  # noqa: F401
 )
 
 # ── Persistent per-session SSE channel (Option X) ──────────────────────────
+# Constants stay in api/config.py (2 lines; no dedicated module warranted).
 # A long-lived SSE channel scoped to a WebUI session_id rather than a single
 # agent turn (stream_id). Subscribed to by the frontend on session mount,
 # torn down on session unmount, and refcounted across tabs. Used to deliver
@@ -1017,107 +1023,14 @@ from api._cfg.settings_store import (  # noqa: F401  pylint: disable=unused-impo
 )
 
 
-# Apply saved settings on startup (override env-derived defaults)
-# Exception: if HERMES_WEBUI_DEFAULT_WORKSPACE is explicitly set in the
-# environment, it wins over whatever settings.json has stored.  Persisted
-# config must never shadow an explicit env-var override (Docker deployments
-# rely on this — otherwise deleting settings.json is the only escape).
-_startup_settings = load_settings()
-try:
-    _settings_file_exists = SETTINGS_FILE.exists()
-except OSError:
-    _settings_file_exists = False
-if _settings_file_exists:
-    if not os.getenv("HERMES_WEBUI_DEFAULT_WORKSPACE"):
-        DEFAULT_WORKSPACE = resolve_default_workspace(
-            _startup_settings.get("default_workspace")
-        )
-    _startup_settings.pop("default_model", None)  # always drop stale value; model comes from config.yaml
-    if _startup_settings.get("default_workspace") != str(DEFAULT_WORKSPACE):
-        _startup_settings["default_workspace"] = str(DEFAULT_WORKSPACE)
-        try:
-            startup_persisted_speech_keys = _extract_persisted_speech_keys(
-                _read_raw_settings_file()
-            )
-            _atomic_write_settings_text(
-                SETTINGS_FILE,
-                json.dumps(
-                    _settings_payload_for_write(
-                        _startup_settings, startup_persisted_speech_keys
-                    ),
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-            )
-        except Exception:
-            pass
+# Startup settings bootstrap (split: api/_cfg/startup_settings.py) ────────────
+# Canonical implementation lives in api/_cfg/startup_settings.py; re-exported here.
+from api._cfg.startup_settings import _startup_settings  # noqa: F401
 
-# ── SESSIONS in-memory cache (LRU OrderedDict) ───────────────────────────────
-SESSIONS: collections.OrderedDict = collections.OrderedDict()
-
-
-def get_runtime_diagnostics_snapshot() -> dict[str, dict[str, object]]:
-    """Return nonblocking scalar observations owned by the config module."""
-    result = {
-        "sessions": {"available": False, "resident": 0, "cap": 0},
-        "models_cache": {
-            "available": False,
-            "groups": 0,
-            "models": 0,
-            "age_seconds": None,
-        },
-    }
-    try:
-        if LOCK.acquire(blocking=False):
-            try:
-                # Held-section discipline: len(), arithmetic, and owner-held
-                # scalars only. Never call anything here that can resolve config
-                # or a profile, touch the filesystem, import a module, or wait on
-                # another lock — the cap is the scalar _evict_sessions_over_cap()
-                # published, precisely so this section stays leaf-nonblocking.
-                result["sessions"] = {
-                    "available": True,
-                    "resident": max(0, int(len(SESSIONS))),
-                    "cap": max(0, int(_LAST_APPLIED_SESSIONS_CACHE_MAX)),
-                }
-            finally:
-                LOCK.release()
-    except Exception:
-        pass
-    try:
-        if _available_models_cache_lock.acquire(blocking=False):
-            try:
-                # Same held-section discipline: len(), isinstance, float(), and
-                # time.monotonic() only. _available_models_cache_lock is an RLock
-                # (see its definition), so a nonblocking acquire from a thread
-                # that already holds it would report available mid-build; safe
-                # here because health collection is never nested inside a
-                # catalog build, and nothing may be added that changes that.
-                snapshot = _available_models_cache
-                groups = snapshot.get("groups") if isinstance(snapshot, dict) else None
-                group_count = len(groups) if isinstance(groups, list) else 0
-                model_count = 0
-                if isinstance(groups, list):
-                    for group in groups:
-                        if isinstance(group, dict):
-                            for bucket in ("models", "extra_models"):
-                                models = group.get(bucket)
-                                if isinstance(models, list):
-                                    model_count += len(models)
-                age = None
-                if snapshot is not None and _available_models_cache_ts:
-                    age = max(0.0, time.monotonic() - float(_available_models_cache_ts))
-                result["models_cache"] = {
-                    "available": True,
-                    "groups": max(0, int(group_count)),
-                    "models": max(0, int(model_count)),
-                    "age_seconds": age,
-                }
-            finally:
-                _available_models_cache_lock.release()
-    except Exception:
-        pass
-    return result
+# ── SESSIONS LRU + runtime diagnostics (split: api/_cfg/runtime_diag.py) ─
+# Canonical implementations live in api/_cfg/runtime_diag.py; re-exported here so
+# ``from api.config import SESSIONS`` keeps working and dict identity is preserved.
+from api._cfg.runtime_diag import SESSIONS, get_runtime_diagnostics_snapshot  # noqa: F401
 
 # ── Profile state initialisation ────────────────────────────────────────────
 # Must run after all imports are resolved to correctly patch module-level caches
