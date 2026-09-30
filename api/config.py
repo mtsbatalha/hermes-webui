@@ -159,26 +159,109 @@ import sys as _sys
 import types as _types
 
 
-class _ConfigModule(_types.ModuleType):
-    def __getattr__(self, name: str):  # type: ignore[override]
-        if name in {"_cfg_mtime", "_cfg_path", "_cfg_fingerprint", "_effective_config_path"}:
-            import api._cfg.config_store as _cs
+_REGISTRY_PROXY = {
+    # config_store scalars
+    "_cfg_mtime": "api._cfg.config_store",
+    "_cfg_path": "api._cfg.config_store",
+    "_cfg_fingerprint": "api._cfg.config_store",
+    "_effective_config_path": "api._cfg.config_store",
+    # stream_registry
+    "STREAMS": "api._cfg.stream_registry",
+    "STREAMS_LOCK": "api._cfg.stream_registry",
+    "STREAM_SESSION_OWNERS": "api._cfg.stream_registry",
+    "STREAM_SESSION_OWNERS_LOCK": "api._cfg.stream_registry",
+    "CANCEL_FLAGS": "api._cfg.stream_registry",
+    "AGENT_INSTANCES": "api._cfg.stream_registry",
+    "STREAM_PARTIAL_TEXT": "api._cfg.stream_registry",
+    "STREAM_REASONING_TEXT": "api._cfg.stream_registry",
+    "STREAM_LIVE_TOOL_CALLS": "api._cfg.stream_registry",
+    "STREAM_GOAL_RELATED": "api._cfg.stream_registry",
+    "STREAM_LAST_EVENT_ID": "api._cfg.stream_registry",
+    "PENDING_GOAL_CONTINUATION": "api._cfg.stream_registry",
+    "peek_stream": "api._cfg.stream_registry",
+    "register_stream_owner": "api._cfg.stream_registry",
+    "stream_owner_session_id": "api._cfg.stream_registry",
+    "unregister_stream_owner": "api._cfg.stream_registry",
+    # session_writeback
+    "SESSION_WRITEBACK_OWNERS": "api._cfg.session_writeback",
+    "SESSION_WRITEBACK_OWNERS_LOCK": "api._cfg.session_writeback",
+    "register_session_writeback_owner": "api._cfg.session_writeback",
+    "session_writeback_owner": "api._cfg.session_writeback",
+    "clear_session_writeback_owner_if_owned": "api._cfg.session_writeback",
+    # process_wakeup
+    "PROCESS_SESSION_INDEX": "api._cfg.process_wakeup",
+    "PROCESS_SESSION_INDEX_LOCK": "api._cfg.process_wakeup",
+    "PENDING_BG_TASK_COMPLETIONS": "api._cfg.process_wakeup",
+    "BG_TASK_COMPLETE_EVENTS_SEEN": "api._cfg.process_wakeup",
+    "BG_TASK_COMPLETE_EVENTS_SEEN_LOCK": "api._cfg.process_wakeup",
+    "DEFERRED_PROCESS_WAKEUPS": "api._cfg.process_wakeup",
+    "DEFERRED_PROCESS_WAKEUPS_LOCK": "api._cfg.process_wakeup",
+    # active_runs
+    "ACTIVE_RUNS": "api._cfg.active_runs",
+    "ACTIVE_RUNS_LOCK": "api._cfg.active_runs",
+    "LAST_RUN_FINISHED_AT": "api._cfg.active_runs",
+    "SERVER_START_TIME": "api._cfg.active_runs",
+    "SESSION_AGENT_CACHE": "api._cfg.active_runs",
+    "SESSION_AGENT_CACHE_LOCK": "api._cfg.active_runs",
+    "SESSION_AGENT_CACHE_MAX": "api._cfg.active_runs",
+    "_evict_session_agent": "api._cfg.active_runs",
+    "active_run_is_attachable": "api._cfg.active_runs",
+    "active_run_cancel_is_stale": "api._cfg.active_runs",
+    "register_active_run": "api._cfg.active_runs",
+    "unregister_active_run": "api._cfg.active_runs",
+    "update_active_run": "api._cfg.active_runs",
+    # session_locks
+    "SESSION_AGENT_LOCKS": "api._cfg.session_locks",
+    "SESSION_AGENT_LOCKS_LOCK": "api._cfg.session_locks",
+    "_get_session_agent_lock": "api._cfg.session_locks",
+    "_alias_session_agent_lock": "api._cfg.session_locks",
+    # thread_env
+    "_thread_ctx": "api._cfg.thread_env",
+    "_set_thread_env": "api._cfg.thread_env",
+    "_clear_thread_env": "api._cfg.thread_env",
+    "_thread_local_env_value": "api._cfg.thread_env",
+    "_expand_env_vars": "api._cfg.thread_env",
+    # stream_channel
+    "StreamChannel": "api._cfg.stream_channel",
+    "create_stream_channel": "api._cfg.stream_channel",
+}
 
-            return getattr(_cs, name)
+
+class _ConfigModule(_types.ModuleType):
+    def __getattribute__(self, name: str):  # type: ignore[override]
+        # Delegate registry names live to canonical modules so scalar
+        # rebindings (e.g. LAST_RUN_FINISHED_AT) stay coherent.
+        proxy = globals().get("_REGISTRY_PROXY")
+        if isinstance(proxy, dict) and name in proxy:
+            import importlib
+
+            m = importlib.import_module(proxy[name])
+            return getattr(m, name)
+        return super().__getattribute__(name)
+
+    def __getattr__(self, name: str):  # type: ignore[override]
+        # Fallback for names not yet in __dict__ but in proxy (import order)
+        mod = _REGISTRY_PROXY.get(name)
+        if mod is not None:
+            import importlib
+
+            m = importlib.import_module(mod)
+            return getattr(m, name)
         raise AttributeError(f"module 'api.config' has no attribute {name!r}")
 
     def __setattr__(self, name: str, value) -> None:  # type: ignore[override]
-        if name in {"_cfg_mtime", "_cfg_path", "_cfg_fingerprint"}:
-            import api._cfg.config_store as _cs
+        mod = _REGISTRY_PROXY.get(name)
+        if mod is not None:
+            import importlib
 
-            setattr(_cs, name, value)
-            return
+            m = importlib.import_module(mod)
+            setattr(m, name, value)
         super().__setattr__(name, value)
 
     def __dir__(self):  # type: ignore[override]
         import api._cfg.config_store as _cs
 
-        return sorted(set(super().__dir__()) | {"_cfg_mtime", "_cfg_path", "_cfg_fingerprint", "_effective_config_path"} | set(dir(_cs)))
+        return sorted(set(super().__dir__()) | set(_REGISTRY_PROXY.keys()) | set(dir(_cs)))
 
 
 _sys.modules[__name__].__class__ = _ConfigModule
@@ -814,111 +897,41 @@ if False:  # pragma: no cover
         raise NotImplementedError
 
 
-STREAMS: dict = {}
-STREAMS_LOCK = threading.Lock()
+# ── Stream / stream-owner / SSE-buffer registries (split: api/_cfg/stream_registry.py) ─
+# Canonical implementations live in api/_cfg/stream_registry.py; re-exported here
+# so ``from api.config import STREAMS`` keeps working and dict identity is
+# preserved for ``config.STREAMS.clear()`` in tests.
+from api._cfg.stream_registry import (  # noqa: F401
+    AGENT_INSTANCES,
+    CANCEL_FLAGS,
+    PENDING_GOAL_CONTINUATION,
+    STREAM_GOAL_RELATED,
+    STREAM_LAST_EVENT_ID,
+    STREAM_LIVE_TOOL_CALLS,
+    STREAM_PARTIAL_TEXT,
+    STREAM_REASONING_TEXT,
+    STREAM_SESSION_OWNERS,
+    STREAM_SESSION_OWNERS_LOCK,
+    STREAMS,
+    STREAMS_LOCK,
+    peek_stream,
+    register_stream_owner,
+    stream_owner_session_id,
+    unregister_stream_owner,
+)
 
 
-def peek_stream(stream_id):
-    """Lock-disciplined stream queue lookup.
-
-    Writers mutate STREAMS under STREAMS_LOCK (teardown in api/streaming.py,
-    the route layer's start/cancel paths); reads must take the same lock so a
-    read racing a teardown pop can never observe-and-use a queue the registry
-    has already released. Returns the queue or None — callers keep their
-    existing None-guard fallbacks.
-    """
-    with STREAMS_LOCK:
-        return STREAMS.get(stream_id)
-
-
-# stream_id -> session_id owner, populated synchronously before worker startup so
-# stream-id authorization does not depend on worker lifecycle registration.
-STREAM_SESSION_OWNERS: dict = {}
-STREAM_SESSION_OWNERS_LOCK = threading.Lock()
-CANCEL_FLAGS: dict = {}
-AGENT_INSTANCES: dict = {}  # stream_id -> AIAgent instance for interrupt propagation
-STREAM_PARTIAL_TEXT: dict = {}  # stream_id -> partial assistant text accumulated during streaming
-STREAM_REASONING_TEXT: dict = {}  # stream_id -> reasoning trace accumulated during streaming (#1361 §A)
-STREAM_LIVE_TOOL_CALLS: dict = {}  # stream_id -> live tool calls accumulated during streaming (#1361 §B)
-STREAM_GOAL_RELATED: dict = {}  # stream_id -> bool: only evaluate goal for goal-related turns (#1932)
-STREAM_LAST_EVENT_ID: dict = {}  # stream_id -> latest journal event_id for `id:` field on live SSE frames (stage-364)
-PENDING_GOAL_CONTINUATION: set = set()  # session_ids awaiting a goal continuation turn (#1932)
-
-
-def register_stream_owner(stream_id: str, session_id: str) -> None:
-    """Record the session that owns a stream before worker startup."""
-    stream_id = str(stream_id or "").strip()
-    session_id = str(session_id or "").strip()
-    if not stream_id or not session_id:
-        return
-    with STREAM_SESSION_OWNERS_LOCK:
-        STREAM_SESSION_OWNERS[stream_id] = session_id
-
-
-def stream_owner_session_id(stream_id: str) -> str | None:
-    """Return the synchronously-recorded owner session for a stream, if any."""
-    stream_id = str(stream_id or "").strip()
-    if not stream_id:
-        return None
-    with STREAM_SESSION_OWNERS_LOCK:
-        owner = STREAM_SESSION_OWNERS.get(stream_id)
-    owner = str(owner or "").strip()
-    return owner or None
-
-
-def unregister_stream_owner(stream_id: str) -> None:
-    """Forget the pre-worker stream owner once the stream has torn down."""
-    stream_id = str(stream_id or "").strip()
-    if not stream_id:
-        return
-    with STREAM_SESSION_OWNERS_LOCK:
-        STREAM_SESSION_OWNERS.pop(stream_id, None)
-
-
-# ── Per-session writeback-ownership registry (#6623 re-gate) ────────────────
-# Maps session_id -> stream_id of the turn that currently owns the session's
-# writeback. Written whenever a turn is admitted (route layer, next to
-# session.active_stream_id), REPLACED when a successor turn is admitted, and
-# NEVER cleared by cancel_stream() — cancel eagerly pops STREAMS/ACTIVE_RUNS
-# and clears ``active_stream_id``, so a delayed finalizer from an old worker
-# cannot tell "the session advanced to a successor" apart from "cancel simply
-# cleared the field" by looking at its own (possibly LRU-evicted, detached)
-# snapshot. This record survives cancel cleanup: the owning worker's own
-# finally clears the entry, and only while it still owns it.
-SESSION_WRITEBACK_OWNERS: dict = {}
-SESSION_WRITEBACK_OWNERS_LOCK = threading.Lock()
-
-
-def register_session_writeback_owner(session_id: str, stream_id: str) -> None:
-    """Record the stream that currently owns a session's writeback."""
-    session_id = str(session_id or "").strip()
-    stream_id = str(stream_id or "").strip()
-    if not session_id or not stream_id:
-        return
-    with SESSION_WRITEBACK_OWNERS_LOCK:
-        SESSION_WRITEBACK_OWNERS[session_id] = stream_id
-
-
-def session_writeback_owner(session_id: str) -> str | None:
-    """Return the stream that currently owns the session's writeback, if any."""
-    session_id = str(session_id or "").strip()
-    if not session_id:
-        return None
-    with SESSION_WRITEBACK_OWNERS_LOCK:
-        owner = SESSION_WRITEBACK_OWNERS.get(session_id)
-    owner = str(owner or "").strip()
-    return owner or None
-
-
-def clear_session_writeback_owner_if_owned(session_id: str, stream_id: str) -> None:
-    """Forget the writeback-ownership entry only while ``stream_id`` still owns it."""
-    session_id = str(session_id or "").strip()
-    stream_id = str(stream_id or "").strip()
-    if not session_id or not stream_id:
-        return
-    with SESSION_WRITEBACK_OWNERS_LOCK:
-        if SESSION_WRITEBACK_OWNERS.get(session_id) == stream_id:
-            SESSION_WRITEBACK_OWNERS.pop(session_id, None)
+# ── Per-session writeback-ownership registry (split: api/_cfg/session_writeback.py) ─
+# Canonical implementations live in api/_cfg/session_writeback.py; re-exported here
+# so ``from api.config import SESSION_WRITEBACK_OWNERS`` keeps working and dict
+# identity is preserved for tests.
+from api._cfg.session_writeback import (  # noqa: F401
+    SESSION_WRITEBACK_OWNERS,
+    SESSION_WRITEBACK_OWNERS_LOCK,
+    clear_session_writeback_owner_if_owned,
+    register_session_writeback_owner,
+    session_writeback_owner,
+)
 
 
 # ── Gateway capability cache (split: api/_cfg/gateway.py) ─────────────────────
@@ -937,37 +950,19 @@ from api._cfg.gateway import (  # noqa: F401
 )
 
 
-# ── notify_on_complete agent-wakeup wiring ─────────────────────────────────
-# When terminal(notify_on_complete=true, background=true) fires, the process
-# registry pushes a completion event onto tools.process_registry.completion_queue.
-# A drain task spawned at WebUI startup (api/background_process.py) reads that
-# queue and emits an SSE `process_complete` event to the matching session.
-# PROCESS_SESSION_INDEX maps the per-process "session_key" (set in the spawned
-# subprocess via HERMES_SESSION_KEY) back to the WebUI session_id that owns it,
-# so the drain task can route the event to the right SSE channel.
-# PENDING_BG_TASK_COMPLETIONS mirrors PENDING_GOAL_CONTINUATION: server-side
-# marker discarded atomically by routes.py when the frontend re-POSTs the
-# wakeup_prompt as the next user turn. (process_complete event, agent wakeup fix)
-PROCESS_SESSION_INDEX: dict = {}  # process_registry session_key -> WebUI session_id
-PROCESS_SESSION_INDEX_LOCK = threading.Lock()
-PENDING_BG_TASK_COMPLETIONS: set = set()  # session_ids awaiting a process_complete wakeup turn
-BG_TASK_COMPLETE_EVENTS_SEEN: dict = {}  # session_id -> set[process_id] for idempotency
-BG_TASK_COMPLETE_EVENTS_SEEN_LOCK = threading.Lock()
-
-# Defer-path fix (fast-bg-task wakeup race): when a completion arrives while a
-# turn is active, Option Z's drain branch CANNOT start a turn (would 409). The
-# pre-existing PENDING_BG_TASK_COMPLETIONS marker was a bare session_id flag —
-# the wakeup_prompt was DISCARDED, and the only consumer (PR #2279 next-turn
-# drain) reads completion_queue, which the Option Z drain thread already
-# emptied. So for an autonomous agent (no next user turn) the deferred wakeup
-# was lost forever. DEFERRED_PROCESS_WAKEUPS persists the actual prompt(s) so a
-# turn-teardown idle-hook (api/streaming) can redeliver them once the session
-# goes idle — symmetric with the idle branch (idle now → fire now; busy now →
-# fire at turn-end). Atomic claim (pop under lock) guarantees single delivery:
-# whoever claims first (teardown hook OR next-turn drain) fires; the other
-# finds nothing → no double-fire, no wakeup loop.
-DEFERRED_PROCESS_WAKEUPS: dict = {}  # session_id -> list[{"process_id", "wakeup_prompt"}]
-DEFERRED_PROCESS_WAKEUPS_LOCK = threading.Lock()
+# ── notify_on_complete wakeup wiring (split: api/_cfg/process_wakeup.py) ─────────
+# Canonical implementations live in api/_cfg/process_wakeup.py; re-exported here
+# so ``from api.config import PROCESS_SESSION_INDEX`` keeps working and dict
+# identity is preserved for tests.
+from api._cfg.process_wakeup import (  # noqa: F401
+    BG_TASK_COMPLETE_EVENTS_SEEN,
+    BG_TASK_COMPLETE_EVENTS_SEEN_LOCK,
+    DEFERRED_PROCESS_WAKEUPS,
+    DEFERRED_PROCESS_WAKEUPS_LOCK,
+    PENDING_BG_TASK_COMPLETIONS,
+    PROCESS_SESSION_INDEX,
+    PROCESS_SESSION_INDEX_LOCK,
+)
 
 # ── Persistent per-session SSE channel (Option X) ──────────────────────────
 # A long-lived SSE channel scoped to a WebUI session_id rather than a single
@@ -982,170 +977,25 @@ DEFERRED_PROCESS_WAKEUPS_LOCK = threading.Lock()
 SESSION_CHANNEL_IDLE_TTL_SECS: int = 14400  # 4 hours
 SESSION_CHANNEL_SUBSCRIBER_GRACE_SECS: int = 60  # subscribers-empty grace
 
-# Active agent-run registry. This intentionally tracks worker lifecycle rather
-# than SSE lifecycle: cancel/reconnect may remove STREAMS while the worker is
-# still unwinding, blocked in a provider call, or waiting for delegated work.
-ACTIVE_RUNS: dict = {}
-ACTIVE_RUNS_LOCK = threading.Lock()
-LAST_RUN_FINISHED_AT: float | None = None
-SERVER_START_TIME = time.time()
-
-
-def active_run_is_attachable(run_entry) -> bool:
-    """Return whether a run row still represents renderable live work.
-
-    ``ACTIVE_RUNS`` tracks WORKER LIFECYCLE, which is deliberately broader than
-    "a turn a browser may attach to": ``cancel_stream()`` leaves the row in
-    ``phase="cancelling"`` while the worker unwinds so a successor cannot start
-    on top of it. That row is already terminal from the client's perspective —
-    its run journal ends in a terminal event — so recovery paths that hand a
-    stream id to the renderer must exclude it. Otherwise every fresh
-    ``/api/session/stream`` subscription replays ``server_turn_started`` for a
-    cancelled run, the client attaches, consumes the terminal event, tears the
-    renderer down and resubscribes, and the loop repeats indefinitely.
-
-    Non-dict entries stay attachable so callers that store an opaque marker are
-    unaffected; production registrations are dicts carrying ``phase``.
-    """
-    return not (
-        isinstance(run_entry, dict)
-        and str(run_entry.get("phase") or "").strip() == "cancelling"
-    )
-
-
-def active_run_cancel_is_stale(
-    run_entry,
-    *,
-    grace_seconds: float,
-    now: float | None = None,
-) -> bool:
-    """Return whether a cancelling worker outlived its bounded unwind window.
-
-    The age anchor is ``cancelled_at`` rather than the original ``started_at``
-    so a long-running turn that was just cancelled is never mistaken for an
-    orphan; ``started_at`` remains the fallback for rows created before the
-    cancellation timestamp existed. Callers own the grace window because the
-    tolerated unwind differs per surface.
-    """
-    if not isinstance(run_entry, dict):
-        return False
-    if str(run_entry.get("phase") or "").strip() != "cancelling":
-        return False
-    anchor = run_entry.get("cancelled_at") or run_entry.get("started_at")
-    if not anchor:
-        return False
-    try:
-        age = (time.time() if now is None else float(now)) - float(anchor)
-        return age >= float(grace_seconds)
-    except (TypeError, ValueError):
-        return False
-
-
-def register_active_run(stream_id: str, **metadata) -> None:
-    """Mark a WebUI agent worker as alive until its outer finally exits."""
-    if not stream_id:
-        return
-    now = time.time()
-    entry = dict(metadata or {})
-    entry.setdefault("stream_id", stream_id)
-    entry.setdefault("started_at", now)
-    entry.setdefault("phase", "running")
-    with ACTIVE_RUNS_LOCK:
-        ACTIVE_RUNS[stream_id] = entry
-
-
-def update_active_run(stream_id: str, **metadata) -> None:
-    """Update active-run metadata without creating a new run implicitly."""
-    if not stream_id:
-        return
-    with ACTIVE_RUNS_LOCK:
-        entry = ACTIVE_RUNS.get(stream_id)
-        if entry is not None:
-            entry.update(metadata)
-
-
-def unregister_active_run(stream_id: str) -> None:
-    """Remove a worker from the active-run registry and record idle start."""
-    if not stream_id:
-        return
-    global LAST_RUN_FINISHED_AT
-    with ACTIVE_RUNS_LOCK:
-        ACTIVE_RUNS.pop(stream_id, None)
-        LAST_RUN_FINISHED_AT = time.time()
-    unregister_stream_owner(stream_id)
-
-# Agent cache: reuse AIAgent across messages in the same WebUI session so that
-# _user_turn_count survives between turns.  This mirrors the gateway's
-# _agent_cache pattern and is required for injectionFrequency: "first-turn".
-# LRU cache with size limit to prevent memory bloat.
-# All cache operations (get, set, move_to_end, popitem) are protected by
-# SESSION_AGENT_CACHE_LOCK for thread safety in multi-threaded ASGI servers.
-import collections
-SESSION_AGENT_CACHE: collections.OrderedDict = collections.OrderedDict()  # LRU cache
-# Each cached agent pins a full conversation transcript in RAM, so this cap is
-# the dominant lever on WebUI resident memory (issue #3506). The default is kept
-# deliberately modest -- large/long sessions can each weigh tens of MB, so 50
-# live agents could pin >1 GB on a heavily multiplexed install. Operators can
-# tune it via HERMES_WEBUI_AGENT_CACHE_MAX without editing source.
-SESSION_AGENT_CACHE_MAX = _env_int("HERMES_WEBUI_AGENT_CACHE_MAX", 25)
-SESSION_AGENT_CACHE_LOCK = threading.Lock()
-
-
-def _evict_session_agent(session_id: str) -> None:
-    """Remove a cached agent for a session (on delete, clear, or model switch).
-
-    Attempts a lifecycle commit before dropping the agent handle so that
-    batch-extraction memory providers can extract any pending work.  If the
-    commit fails or there is uncommitted work with no successful commit, the
-    lifecycle entry is preserved (not unregistered) so a future commit can
-    retry.
-    """
-    agent = None
-    with SESSION_AGENT_CACHE_LOCK:
-        entry = SESSION_AGENT_CACHE.pop(session_id, None)
-        if entry is not None:
-            agent = entry[0] if isinstance(entry, tuple) else None
-    if agent is None:
-        return
-    # A live run for this session may still hold this agent's _session_db (the
-    # worker assigns agent._session_db at run start). Never close it out from
-    # under an in-flight turn — ACTIVE_RUNS is the authoritative liveness signal
-    # (mirrors the worker's own LRU-eviction guard in streaming.py). When a run
-    # is live we still drop the cache handle above (harmless — the worker holds
-    # a local ref), but skip the lifecycle commit + _session_db.close() so the
-    # running turn can finish persisting. Hardens /clear + model-switch eviction
-    # too, not just truncate (#5096 Bug D).
-    _run_active = False
-    try:
-        with ACTIVE_RUNS_LOCK:
-            for _entry in (ACTIVE_RUNS or {}).values():
-                if (_entry or {}).get("session_id") == session_id:
-                    _run_active = True
-                    break
-    except Exception:
-        _run_active = False
-    if _run_active:
-        return
-    should_close = True
-    try:
-        from api.session_lifecycle import commit_session_memory, discard_session, has_uncommitted_work, unregister_agent
-        if has_uncommitted_work(session_id):
-            commit_session_memory(session_id, agent=agent, wait=True)
-        if not has_uncommitted_work(session_id):
-            unregister_agent(session_id)
-            # Bound the lifecycle dict: drop the entry now that the session has
-            # no uncommitted work and the agent handle is gone (issue #3506).
-            discard_session(session_id)
-        else:
-            should_close = False
-    except Exception:
-        should_close = False
-        logger.debug("Lifecycle commit on eviction failed for %s", session_id, exc_info=True)
-    if should_close and getattr(agent, '_session_db', None) is not None:
-        try:
-            agent._session_db.close()
-        except Exception:
-            logger.debug("Failed to close _session_db on eviction for %s", session_id, exc_info=True)
+# ── Active-run + agent-cache registries (split: api/_cfg/active_runs.py) ─────────
+# Canonical implementations live in api/_cfg/active_runs.py; re-exported here so
+# ``from api.config import ACTIVE_RUNS`` keeps working and dict identity is
+# preserved for tests.
+from api._cfg.active_runs import (  # noqa: F401
+    ACTIVE_RUNS,
+    ACTIVE_RUNS_LOCK,
+    LAST_RUN_FINISHED_AT,
+    SERVER_START_TIME,
+    SESSION_AGENT_CACHE,
+    SESSION_AGENT_CACHE_LOCK,
+    SESSION_AGENT_CACHE_MAX,
+    _evict_session_agent,
+    active_run_cancel_is_stale,
+    active_run_is_attachable,
+    register_active_run,
+    unregister_active_run,
+    update_active_run,
+)
 
 # ── Thread-local env context (split: api/_cfg/thread_env.py) ────────────────
 # Canonical implementations live in api/_cfg/thread_env.py; re-exported here so
