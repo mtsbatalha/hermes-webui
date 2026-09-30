@@ -1147,18 +1147,13 @@ def _evict_session_agent(session_id: str) -> None:
         except Exception:
             logger.debug("Failed to close _session_db on eviction for %s", session_id, exc_info=True)
 
-# ── Thread-local env context ─────────────────────────────────────────────────
-# (_thread_ctx + _thread_local_env_value are defined near the top of this module,
-# above the config-file section, so _expand_env_vars can reference them at the
-# import-time reload_config() without a forward-reference NameError.)
-
-
-def _set_thread_env(**kwargs):
-    _thread_ctx.env = kwargs
-
-
-def _clear_thread_env():
-    _thread_ctx.env = {}
+# ── Thread-local env context (split: api/_cfg/thread_env.py) ────────────────
+# Canonical implementations live in api/_cfg/thread_env.py; re-exported here so
+# ``from api.config import _set_thread_env`` keeps working.  Kept near the top
+# originally so _expand_env_vars could reference _thread_ctx at import-time
+# reload_config() without a forward-reference NameError; now both live together.
+from api._cfg.thread_env import _clear_thread_env as _clear_thread_env  # noqa: F401, PLC0414
+from api._cfg.thread_env import _set_thread_env as _set_thread_env  # noqa: F401, PLC0414
 
 
 # ── Per-session agent locks (split: api/_cfg/session_locks.py) ────────────────

@@ -49,3 +49,11 @@ def _expand_env_vars(obj):
     if isinstance(obj, list):
         return [_expand_env_vars(item) for item in obj]
     return obj
+
+
+def _set_thread_env(**kwargs):
+    _thread_ctx.env = kwargs
+
+
+def _clear_thread_env():
+    _thread_ctx.env = {}
