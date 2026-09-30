@@ -51,30 +51,7 @@ HOST = os.getenv("HERMES_WEBUI_HOST", "127.0.0.1")
 PORT = int(os.getenv("HERMES_WEBUI_PORT", "8787"))
 
 
-def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
-    """Read a positive int from the environment, falling back on bad input.
-
-    Used for operator-tunable memory caps (issue #3506) so large installs can
-    shrink the agent/session caches without editing source. A missing, empty,
-    non-numeric, or below-``minimum`` value falls back to ``default`` so a typo
-    can never disable a cache bound entirely.
-    """
-    raw = os.getenv(name)
-    if raw is None or not str(raw).strip():
-        return default
-    try:
-        value = int(str(raw).strip())
-    except (TypeError, ValueError):
-        return default
-    return value if value >= minimum else default
-
-
-def _env_int_clamped(name: str, default: int, *, minimum: int = 1, maximum: int) -> int:
-    """Like ``_env_int``, then clamp a valid override to ``maximum``."""
-    value = _env_int(name, default, minimum=minimum)
-    if not str(os.getenv(name) or "").strip():
-        return value
-    return min(value, maximum)
+from api._cfg.env import _env_int, _env_int_clamped, _env_mb_bytes  # split: env helpers live in api/_cfg/env.py
 
 
 # Sidebar recency window. Resolved here, before profile init, so a profile
@@ -123,34 +100,7 @@ logger = logging.getLogger(__name__)
 CUSTOM_MODELS_ENDPOINT_TIMEOUT_SECONDS = 5.0
 
 
-def _env_mb_bytes(name: str, default_mb: int) -> int:
-    """Parse an optional megabyte environment variable into bytes.
-
-    Accepts values like ``200``, ``200MB``, or ``200MiB``. Invalid or
-    non-positive values fall back to the provided default.
-    """
-    raw = os.getenv(name, "").strip()
-    if not raw:
-        return default_mb * 1024 * 1024
-    m = re.match(r"^(\d+)\s*(?:m|mb|mib)?$", raw, re.IGNORECASE)
-    if not m:
-        logger.warning(
-            "Invalid %s=%r; expected a positive integer in MB. Falling back to %sMB.",
-            name,
-            raw,
-            default_mb,
-        )
-        return default_mb * 1024 * 1024
-    value_mb = int(m.group(1))
-    if value_mb <= 0:
-        logger.warning(
-            "Invalid %s=%r; expected a value greater than zero. Falling back to %sMB.",
-            name,
-            raw,
-            default_mb,
-        )
-        return default_mb * 1024 * 1024
-    return value_mb * 1024 * 1024
+# _env_mb_bytes now imported from api._cfg.env (see top of file)
 
 
 # ── Hermes agent directory discovery ─────────────────────────────────────────
@@ -1033,71 +983,10 @@ MAX_FILE_BYTES = 400_000
 MAX_UPLOAD_BYTES = _env_mb_bytes("HERMES_WEBUI_MAX_UPLOAD_MB", 100)
 
 # ── File type maps ───────────────────────────────────────────────────────────
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp"}
-MD_EXTS = {".md", ".markdown", ".mdown"}
-CODE_EXTS = {
-    ".py",
-    ".js",
-    ".ts",
-    ".jsx",
-    ".tsx",
-    ".css",
-    ".html",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".toml",
-    ".sh",
-    ".bash",
-    ".txt",
-    ".log",
-    ".env",
-    ".csv",
-    ".xml",
-    ".sql",
-    ".rs",
-    ".go",
-    ".java",
-    ".c",
-    ".cpp",
-    ".h",
-}
-MIME_MAP = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".svg": "image/svg+xml",
-    ".webp": "image/webp",
-    ".ico": "image/x-icon",
-    ".bmp": "image/bmp",
-    ".pdf": "application/pdf",
-    ".zip": "application/zip",
-    ".json": "application/json",
-    ".html": "text/html",
-    ".htm": "text/html",
-    ".xls": "application/vnd.ms-excel",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ".doc": "application/msword",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".mp3": "audio/mpeg",
-    ".wav": "audio/wav",
-    ".m4a": "audio/mp4",
-    ".aac": "audio/aac",
-    ".ogg": "audio/ogg",
-    ".oga": "audio/ogg",
-    ".opus": "audio/opus",
-    ".flac": "audio/flac",
-    ".mp4": "video/mp4",
-    ".mov": "video/quicktime",
-    ".m4v": "video/mp4",
-    ".webm": "video/webm",
-    ".ogv": "video/ogg",
-    # TypeScript source files — served as text/plain to avoid XSS from
-    # same-origin inline execution in _handle_file_raw.
-    ".ts": "text/plain",
-    ".tsx": "text/plain",
-}
+# Canonical definitions live in api/_cfg/filetypes.py; re-exported here so
+# external ``from api.config import MIME_MAP`` keeps working and
+# ``api/config.py`` remains the public surface.
+from api._cfg.filetypes import CODE_EXTS, IMAGE_EXTS, MD_EXTS, MIME_MAP  # noqa: F401
 
 # ── Toolsets (from config.yaml or hardcoded default) ─────────────────────────
 _DEFAULT_TOOLSETS = [
