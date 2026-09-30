@@ -601,124 +601,14 @@ from api._cfg.workspace import (  # noqa: F401
 )
 
 
-# ── Startup diagnostics ───────────────────────────────────────────────────────
-def _warn_state_dir_divergence(warn_prefix: str) -> None:
-    """Check if SESSION_DIR is empty but a sibling state directory has session data.
-
-    If the session store looks empty (no *.json files besides _index.json in SESSION_DIR,
-    or SESSION_INDEX_FILE is absent/empty/contains only {}|[]|null), scan STATE_DIR.parent
-    for sibling directories with a sessions/ child that has .json files.
-
-    Prints a diagnostic warning if a divergence is detected, helping users identify when
-    they may have switched launch methods and the HERMES_WEBUI_STATE_DIR env var differs.
-    """
-    try:
-        # Check if session store is empty
-        session_dir_empty = False
-
-        # Check for .json files in SESSION_DIR (excluding _index.json)
-        if SESSION_DIR.exists():
-            json_files = [f for f in SESSION_DIR.glob("*.json") if f.name != "_index.json"]
-            session_dir_empty = len(json_files) == 0
-        else:
-            session_dir_empty = True
-
-        # Check if SESSION_INDEX_FILE is absent, empty, or contains only {}|[]|null
-        index_file_empty = True
-        if SESSION_INDEX_FILE.exists():
-            try:
-                with open(SESSION_INDEX_FILE, "r") as f:
-                    content = f.read().strip()
-                    if content and content not in ("{}", "[]", "null"):
-                        index_file_empty = False
-            except Exception:
-                pass
-
-        # If session store looks empty, scan for siblings with sessions
-        if session_dir_empty and index_file_empty:
-            state_parent = STATE_DIR.parent
-            if state_parent.exists():
-                for sibling in state_parent.iterdir():
-                    if not sibling.is_dir() or sibling == STATE_DIR:
-                        continue
-                    sibling_sessions = sibling / "sessions"
-                    if sibling_sessions.exists():
-                        json_files = [f for f in sibling_sessions.glob("*.json") if f.name != "_index.json"]
-                        if json_files:
-                            # Found a sibling with session data
-                            print(
-                                f"{warn_prefix}  STATE_DIR is empty but a sibling state directory has session data.\n"
-                                f"        Current : {STATE_DIR}\n"
-                                f"        Sibling : {sibling}\n"
-                                f"        If you switched launch methods (bootstrap.py / ctl.sh / systemd),\n"
-                                f"        the active HERMES_WEBUI_STATE_DIR env var may differ from the\n"
-                                f"        previous run. Set it explicitly to restore access:\n"
-                                f"          export HERMES_WEBUI_STATE_DIR={sibling}",
-                                flush=True,
-                            )
-                            return
-    except Exception:
-        pass
-
-
-def print_startup_config() -> None:
-    """Print detected configuration at startup so the user can verify what was found."""
-    ok = "\033[32m[ok]\033[0m"
-    warn = "\033[33m[!!]\033[0m"
-    err = "\033[31m[XX]\033[0m"
-
-    lines = [
-        "",
-        "  Hermes Web UI -- startup config",
-        "  --------------------------------",
-        f"  repo root   : {REPO_ROOT}",
-        f"  agent dir   : {_AGENT_DIR if _AGENT_DIR else 'NOT FOUND'}  {ok if _AGENT_DIR else err}",
-        f"  python      : {PYTHON_EXE}",
-        f"  state dir   : {STATE_DIR}",
-        f"  workspace   : {DEFAULT_WORKSPACE}",
-        f"  host:port   : {HOST}:{PORT}",
-        f"  config file : {_get_config_path()}  {'(found)' if _get_config_path().exists() else '(not found, using defaults)'}",
-        "",
-    ]
-    print("\n".join(lines), flush=True)
-
-    try:
-        _warn_state_dir_divergence(warn)
-    except Exception:
-        pass
-
-    if not _HERMES_FOUND:
-        print(
-            f"{err}  Could not find the Hermes agent directory.\n"
-            "      The server will start but agent features will not work.\n"
-            "\n"
-            "      To fix, set one of:\n"
-            "        export HERMES_WEBUI_AGENT_DIR=/path/to/hermes-agent\n"
-            "        export HERMES_HOME=/path/to/.hermes\n"
-            "\n"
-            "      Or clone hermes-agent as a sibling of this repo:\n"
-            "        git clone <hermes-agent-repo> ../hermes-agent\n",
-            flush=True,
-        )
-
-
-def verify_hermes_imports() -> tuple:
-    """
-    Attempt to import the key Hermes modules.
-    Returns (ok: bool, missing: list[str], errors: dict[str, str]).
-    """
-    required = ["run_agent"]
-    missing = []
-    errors = {}
-    for mod in required:
-        try:
-            __import__(mod)
-        except Exception as e:
-            missing.append(mod)
-            # Capture the full error message so startup logs show WHY
-            # (e.g. pydantic_core .so mismatch) instead of just the name.
-            errors[mod] = f"{type(e).__name__}: {e}"
-    return (len(missing) == 0), missing, errors
+# ── Startup diagnostics (split: api/_cfg/startup.py) ───────────────────────
+# Canonical implementations live in api/_cfg/startup.py; re-exported here so
+# ``from api.config import print_startup_config`` keeps working.
+from api._cfg.startup import (  # noqa: F401
+    _warn_state_dir_divergence,
+    print_startup_config,
+    verify_hermes_imports,
+)
 
 
 # ── Limits ───────────────────────────────────────────────────────────────────
