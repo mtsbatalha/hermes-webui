@@ -71,7 +71,17 @@ def _evaluate_base_href_for_path(path: str) -> str:
     script_match = re.search(r"<script>\(function\(\).*?</script>", INDEX_HTML)
     assert script_match, "index.html should include the dynamic base href script"
     script = script_match.group(0).removeprefix("<script>").removesuffix("</script>")
-    node = f"""
+    # New implementation uses createElement('base'); old used document.write
+    if "createElement('base')" in script:
+        node = f"""
+const location={{origin:'https://example.test', pathname:{json.dumps(path)}}};
+let createdHref='';
+const document={{createElement:(tag)=>{{const el={{}}; Object.defineProperty(el,'href',{{set(v){{createdHref=v;}},get(){{return createdHref;}}}}); return el;}}, head:{{prepend:(el)=>{{}}}}}};
+{script}
+console.log('<base href=\"'+createdHref+'\">');
+"""
+    else:
+        node = f"""
 const location={{origin:'https://example.test', pathname:{json.dumps(path)}}};
 let written='';
 const document={{write:(s)=>{{written+=s;}}}};

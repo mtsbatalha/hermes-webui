@@ -21,9 +21,29 @@ def post(path, body=None):
 
 
 def make_outside_trusted_dir(prefix):
+    # On Windows the per-user Temp (C:\Users\<user>\AppData\Local\Temp) is
+    # inside HOME, so temp_root would be trusted — use the system temp instead.
     home_root = pathlib.Path.home().resolve()
-    temp_root = pathlib.Path(tempfile.gettempdir()).resolve()
-    base_root = temp_root if temp_root != home_root and home_root not in (temp_root, *temp_root.parents) else REPO_ROOT
+    tmp_candidates = [
+        pathlib.Path(tempfile.gettempdir()).resolve(),
+        pathlib.Path("C:/Windows/Temp").resolve(),
+        pathlib.Path("C:/tmp-outside-trusted"),
+    ]
+    base_root = None
+    for cand in tmp_candidates:
+        try:
+            cand.mkdir(parents=True, exist_ok=True)
+            probe = cand / ".tmp-outside-probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+        except Exception:
+            continue
+        # Candidate must not be inside home nor equal to home
+        if cand != home_root and home_root not in cand.parents:
+            base_root = cand
+            break
+    if base_root is None:
+        base_root = REPO_ROOT  # last resort (should not happen on Windows)
     outside_root = base_root / ".tmp-outside-trusted"
     outside_root.mkdir(exist_ok=True)
     return pathlib.Path(tempfile.mkdtemp(prefix=f"{prefix}-", dir=outside_root))

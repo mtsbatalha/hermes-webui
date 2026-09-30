@@ -3,14 +3,34 @@ import re
 
 
 def _src() -> str:
-    with open("api/config.py") as f:
-        return f.read()
+    # After the api/config.py split, provider-detection logic lives in
+    # api/_cfg/models_catalog.py while _PROVIDER_MODELS literals live in
+    # api/_cfg/providers_catalog.py.  Aggregate so regex checks stay valid
+    # regardless of where the code was sliced.
+    parts: list[str] = []
+    for cand in ("api/config.py", "api/_cfg/models_catalog.py", "api/_cfg/providers_catalog.py"):
+        try:
+            with open(cand) as f:
+                parts.append(f.read())
+        except FileNotFoundError:
+            continue
+    return "\n".join(parts) if parts else open("api/config.py").read()
 
 
 def _get_provider_models_keys() -> set:
     """Extract top-level provider keys from _PROVIDER_MODELS dict."""
-    with open("api/config.py") as f:
-        lines = f.readlines()
+    # _PROVIDER_MODELS lives in api/_cfg/providers_catalog.py after the split.
+    for cand in ("api/_cfg/providers_catalog.py", "api/config.py"):
+        try:
+            with open(cand) as f:
+                lines = f.readlines()
+            if any("_PROVIDER_MODELS = {" in l for l in lines):
+                break
+        except FileNotFoundError:
+            continue
+    else:
+        with open("api/config.py") as f:
+            lines = f.readlines()
     keys = []
     in_dict = False
     for line in lines:

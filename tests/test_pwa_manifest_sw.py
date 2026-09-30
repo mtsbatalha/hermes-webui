@@ -412,7 +412,9 @@ class TestBaseHrefOrdering:
 
     def test_base_href_script_before_manifest_link(self):
         src = INDEX.read_text(encoding="utf-8")
-        base_pos = src.find("document.write('<base href=")
+        base_pos = src.find("createElement('base')")
+        if base_pos == -1:
+            base_pos = src.find("document.write('<base href=")
         manifest_pos = src.find('rel="manifest"')
         assert base_pos != -1, "index.html must contain the dynamic base-href script"
         assert manifest_pos != -1, "index.html must contain a manifest link"
@@ -424,7 +426,9 @@ class TestBaseHrefOrdering:
 
     def test_base_href_script_before_favicon_links(self):
         src = INDEX.read_text(encoding="utf-8")
-        base_pos = src.find("document.write('<base href=")
+        base_pos = src.find("createElement('base')")
+        if base_pos == -1:
+            base_pos = src.find("document.write('<base href=")
         favicon_pos = src.find('rel="icon"')
         assert base_pos != -1, "index.html must contain the dynamic base-href script"
         assert favicon_pos != -1, "index.html must contain a favicon link"
