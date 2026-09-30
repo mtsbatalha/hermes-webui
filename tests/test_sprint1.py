@@ -387,17 +387,21 @@ def test_upload_too_large(cleanup_test_sessions):
     """Uploading a file over MAX_UPLOAD_BYTES is rejected (413 or connection closed)."""
     sid, _ = make_session_tracked(cleanup_test_sessions)
 
-    # 21MB > 20MB limit
-    big = b"x" * (21 * 1024 * 1024)
+    from api.config import MAX_UPLOAD_BYTES
+
+    # Slightly over the configured limit (100MB by default).
+    # On Windows the transport may surface this as ConnectionAbortedError
+    # (WinError 10053) rather than the POSIX URLError/ConnectionResetError.
+    big = b"x" * (MAX_UPLOAD_BYTES + 1024)
     try:
         result, status = post_multipart("/api/upload", {"session_id": sid}, {
             "file": ("big.bin", big)
         })
         # If we get a response it should be 413
         assert status == 413, f"Expected 413, got {status}: {result}"
-    except (urllib.error.URLError, ConnectionResetError, BrokenPipeError):
+    except (urllib.error.URLError, ConnectionResetError, BrokenPipeError, ConnectionAbortedError, OSError):
         # Server closed connection after reading Content-Length > limit before body
-        # This is also valid rejection behavior
+        # This is also valid rejection behavior (on Windows: WinError 10053)
         pass
 
 

@@ -80,10 +80,11 @@ def test_raw_endpoint_missing_file_returns_404(cleanup_test_sessions):
 def test_md_file_returns_text_via_api_file(cleanup_test_sessions):
     sid, ws = make_session_tracked(cleanup_test_sessions)
     md = "# Hello\n\nThis is **bold**.\n"
-    (ws / "README.md").write_text(md)
+    (ws / "README.md").write_text(md, newline="\n")
     data, status = get(f"/api/file?session_id={sid}&path=README.md")
     assert status == 200
-    assert data["content"] == md
+    # Windows text-mode translation may return \r\n for files created without newline=""
+    assert data["content"].replace("\r\n", "\n") == md
 
 def test_md_file_with_table(cleanup_test_sessions):
     sid, ws = make_session_tracked(cleanup_test_sessions)
