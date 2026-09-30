@@ -1189,68 +1189,12 @@ from api._cfg.models_cache_io import (  # noqa: F401  pylint: disable=unused-imp
 # Canonical implementations live in api/_cfg/model_labels.py; re-exported here.
 from api._cfg.model_labels import _get_label_for_model  # noqa: F401
 
-def _read_live_provider_model_ids(provider_id: str) -> list[str]:
-    """Return live model IDs from Hermes CLI for a provider, or [] on failure.
-
-    WebUI's static ``_PROVIDER_MODELS`` table is only a fallback.  The agent CLI
-    owns the provider registry and catalog-discovery logic, so ordinary picker
-    groups should ask ``hermes_cli.models.provider_model_ids()`` first (#1240).
-    Provider aliases are tried as a secondary lookup because WebUI keeps a few
-    display-facing IDs (for example ``google`` / ``x-ai``) that Hermes CLI may
-    normalize internally.
-    """
-    pid = str(provider_id or "").strip()
-    if not pid:
-        return []
-    try:
-        from hermes_cli.models import provider_model_ids as _provider_model_ids
-    except Exception:
-        return []
-
-    candidates = [pid]
-    try:
-        alias = _resolve_provider_alias(pid)
-    except Exception:
-        alias = ""
-    if alias and alias not in candidates:
-        candidates.append(alias)
-
-    seen: set[str] = set()
-    for candidate in candidates:
-        try:
-            live_ids = _provider_model_ids(candidate) or []
-        except Exception:
-            logger.debug("Failed to load %s models from hermes_cli", candidate)
-            continue
-        result: list[str] = []
-        for mid in live_ids:
-            mid_s = str(mid or "").strip()
-            if mid_s and mid_s not in seen:
-                seen.add(mid_s)
-                result.append(mid_s)
-        if result:
-            return result
-    return []
-
-
-def _hermes_cli_supports_opencode_go_live_catalog() -> bool:
-    """Whether the installed Agent has Go-specific model discovery.
-
-    Hermes core versions before 0.20.5 route ``opencode-go`` through a
-    generic public catalog. That lookup can return a convincing non-empty
-    list containing models the Go relay rejects with 404, so absence or an
-    unparseable/prerelease version must fail closed to WebUI's static Go list.
-    """
-    try:
-        import hermes_cli
-
-        version = str(getattr(hermes_cli, "__version__", "")).strip()
-    except Exception:
-        return False
-    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version)
-    if not match:
-        return False
-    return tuple(int(part) for part in match.groups()) >= (0, 20, 5)
+# Live-model helpers (split: api/_cfg/live_models.py) -------------------------------
+# Canonical implementations live in api/_cfg/live_models.py; re-exported here.
+from api._cfg.live_models import (  # noqa: F401
+    _hermes_cli_supports_opencode_go_live_catalog,
+    _read_live_provider_model_ids,
+)
 
 
 # Models catalog (split: api/_cfg/models_catalog.py) ----------------------------------------

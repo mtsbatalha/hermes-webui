@@ -210,7 +210,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "api" / "config.py"
-CONFIG = CONFIG_PATH.read_text(encoding="utf-8")
+PROVIDERS_CATALOG_PATH = ROOT / "api" / "_cfg" / "providers_catalog.py"
+# _PROVIDER_MODELS lives in api/_cfg/providers_catalog.py (split from api/config.py);
+# fall back to api/config.py for backwards compat if the split is reverted.
+if PROVIDERS_CATALOG_PATH.exists():
+    CONFIG = PROVIDERS_CATALOG_PATH.read_text(encoding="utf-8")
+    CONFIG_PATH = PROVIDERS_CATALOG_PATH
+else:
+    CONFIG = CONFIG_PATH.read_text(encoding="utf-8")
 
 EXPECTED_OPENCODE_GO_MODEL_IDS = [
     "kimi-k3",
