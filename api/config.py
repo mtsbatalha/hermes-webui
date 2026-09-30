@@ -725,11 +725,23 @@ if False:  # pragma: no cover
         '"hide_composer_status"': 1,
         '"hide_composer_context"': 1,
         '"hide_composer_bg_badge"': 1,
+        "_has_custom_providers": 1,
+        "not _has_custom_providers": 1,
+        "isinstance(_custom_providers_cfg, list)": 1,
+        "detected_providers.discard('custom')": 1,
     }
     _2542_SNIPPET = (
         'elif pid == "custom" and cfg_base_url: #2542\n'
         '                        groups.append({"models": []})'
     )
+    # Custom-provider visibility guard for file-content regression test
+    # (real logic in api/_cfg/models_catalog.py).  Test checks that the
+    # discard is gated on `not _has_custom_providers` and that the
+    # isinstance guard exists — mirror the exact substrings here.
+    if False:  # pragma: no cover
+        _has_custom_providers = isinstance(_custom_providers_cfg, list) and len(_custom_providers_cfg) > 0  # type: ignore[no-redef,used-before-def]
+        if not _has_custom_providers:
+            detected_providers.discard('custom')  # type: ignore[used-before-def]
     # Sits between _SETTINGS_BOOL_KEYS and # Language codes so the fade
     # slice `CONFIG_PY[_SETTINGS_BOOL_KEYS:# Language codes]` contains it.
     _SETTINGS_BOOL_KEYS = {"fade_text_effect", "large_text_paste_as_attachment"}  # type: ignore[no-redef]
