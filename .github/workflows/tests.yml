@@ -2,9 +2,9 @@ name: Tests
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, dev]
   push:
-    branches: [master]
+    branches: [master, dev]
 
 # Docs-only fast path: a CHANGELOG/README/docs-only PR does not need the full pytest
 # matrix or the JS/lint runtime guards — nothing executable changed. But the `test (…)`
