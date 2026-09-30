@@ -39,11 +39,13 @@ def _derive_set_from_config(marker: str) -> set[str]:
     mislabeled. Same technique as test_every_catalog_dotted_id_loses_its_routing_prefix.
     """
     import re as _re
-    config_src = (REPO_ROOT / "api" / "config.py").read_text(encoding="utf-8")
+    ml_path = REPO_ROOT / "api" / "_cfg" / "model_labels.py"
+    src_path = ml_path if ml_path.exists() else (REPO_ROOT / "api" / "config.py")
+    config_src = src_path.read_text(encoding="utf-8")
     start = config_src.index(marker)
     body = config_src[start:config_src.index("}", start)]
     found = {m.lower() for m in _re.findall(r'"([a-z0-9-]+)"', body)}
-    assert found, f"could not derive {marker!r} from api/config.py"
+    assert found, f"could not derive {marker!r} from {src_path}"
     return found
 
 
@@ -359,9 +361,12 @@ def test_every_catalog_dotted_id_loses_its_routing_prefix():
     combined_src = config_src + "\n" + catalog_src
 
     # Derive the real allow-lists out of production source, don't retype them.
+    ml_path = REPO_ROOT / "api" / "_cfg" / "model_labels.py"
+    label_src = (ml_path.read_text(encoding="utf-8") if ml_path.exists() else config_src)
+
     def _set_literal(marker: str) -> set[str]:
-        start = config_src.index(marker)
-        body = config_src[start:config_src.index("}", start)]
+        start = label_src.index(marker)
+        body = label_src[start:label_src.index("}", start)]
         return {m.lower() for m in _re.findall(r'"([a-z0-9-]+)"', body)}
 
     regions = _set_literal("_regions = {")
@@ -443,7 +448,10 @@ def test_frontend_helper_exists_and_is_used():
 
 def test_backend_uses_a_closed_allow_list():
     """Guard the design: the fix must not regress to a generic prefix loop."""
-    config_src = (REPO_ROOT / "api" / "config.py").read_text(encoding="utf-8")
+    # Label impl moved to api/_cfg/model_labels.py (PR7); read canonical copy there.
+    ml_path = REPO_ROOT / "api" / "_cfg" / "model_labels.py"
+    src_path = ml_path if ml_path.exists() else (REPO_ROOT / "api" / "config.py")
+    config_src = src_path.read_text(encoding="utf-8")
     idx = config_src.index("def _get_label_for_model")
     block = config_src[idx:idx + 4000]
     assert "_regions" in block and "_vendors" in block, (
