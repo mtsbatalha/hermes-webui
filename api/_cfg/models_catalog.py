@@ -6,16 +6,27 @@ No external module should import from api._cfg.models_catalog directly.
 
 from __future__ import annotations
 
+import collections
 import copy
 import hashlib
 import json
 import logging
+import math
 import os
+import queue
 import re
+import socket
+import sys
 import threading
 import time
+import traceback
+import urllib.error
+import urllib.request
+import uuid
+import weakref
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import api.paths as _paths
 
@@ -198,7 +209,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 for idx, entry in enumerate(fallback_cfg, start=1):
                     if not isinstance(entry, dict):
                         continue
-                    provider = _resolve_provider_alias(entry.get("provider"))
+                    provider = _ac._resolve_provider_alias(entry.get("provider"))
                     model = str(entry.get("model") or "").strip()
                     if not provider or not model:
                         continue
@@ -283,7 +294,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         # user-facing name from config.yaml (``provider: ollama-local``) and
         # route it through the same ``custom:<name>`` slug the picker emits.
         if active_provider:
-            active_provider = _resolve_configured_provider_id(
+            active_provider = _ac._resolve_configured_provider_id(
                 active_provider,
                 _ac.cfg,
                 base_url=cfg_base_url,
@@ -291,14 +302,14 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
 
         # 2. Read auth store (active_provider fallback + credential_pool inspection)
         auth_store = {}
-        auth_store_path = _get_auth_store_path()
+        auth_store_path = _ac._get_auth_store_path()
         if auth_store_path.exists():
             try:
                 import json as _j
 
                 auth_store = _j.loads(auth_store_path.read_text(encoding="utf-8"))
                 if not active_provider:
-                    active_provider = _resolve_configured_provider_id(
+                    active_provider = _ac._resolve_configured_provider_id(
                         auth_store.get("active_provider"),
                         _ac.cfg,
                         base_url=cfg_base_url,
@@ -319,11 +330,11 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
 
                     for _pid in list(_pool.keys()):
                         try:
-                            _canonical_pid = _resolve_provider_alias(str(_pid))
+                            _canonical_pid = _ac._resolve_provider_alias(str(_pid))
                             # Check credential pool cache first (profile-scoped key
                             # so a pool loaded under another profile can't leak in).
-                            _ck = (_credential_pool_profile_tag(), _pid)
-                            _cached = _CREDENTIAL_POOL_CACHE.get(_ck)
+                            _ck = (_ac._credential_pool_profile_tag(), _pid)
+                            _cached = _ac._CREDENTIAL_POOL_CACHE.get(_ck)
                             if _cached is not None:
                                 _cp_ts, _cp_pool = _cached
                                 if (time.time() - _cp_ts) < 86400.0:
@@ -331,41 +342,41 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                                 else:
                                     _lp_t0 = time.monotonic()
                                     _cp_pool = _load_pool(_pid)
-                                    _CREDENTIAL_POOL_CACHE[_ck] = (time.time(), _cp_pool)
+                                    _ac._CREDENTIAL_POOL_CACHE[_ck] = (time.time(), _cp_pool)
                                     _all_entries = _cp_pool.entries()
                             else:
                                 _lp_t0 = time.monotonic()
                                 _cp_pool = _load_pool(_pid)
-                                _CREDENTIAL_POOL_CACHE[_ck] = (time.time(), _cp_pool)
+                                _ac._CREDENTIAL_POOL_CACHE[_ck] = (time.time(), _cp_pool)
                                 _all_entries = _cp_pool.entries()
                             _explicit = [
                                 e for e in _all_entries
-                                if not _is_ambient_gh_cli_entry(
+                                if not _ac._is_ambient_gh_cli_entry(
                                     str(getattr(e, "source", "") or ""),
                                     str(getattr(e, "label", "") or ""),
                                     str(getattr(e, "key_source", "") or ""),
                                 )
                             ]
-                            if _explicit and _is_known_model_provider(_canonical_pid):
+                            if _explicit and _ac._is_known_model_provider(_canonical_pid):
                                 detected_providers.add(_canonical_pid)
                         except Exception:
                             logger.debug("credential_pool.load_pool(%s) failed", _pid)
                 except ImportError:
-                    for _pid, _entries in _pool.items():
-                        if not isinstance(_entries, list) or len(_entries) == 0:
+                    for _pid, _ac._entries in _pool.items():
+                        if not isinstance(_ac._entries, list) or len(_ac._entries) == 0:
                             continue
                         _has_explicit_cred = any(
                             isinstance(_entry, dict)
-                            and not _is_ambient_gh_cli_entry(
+                            and not _ac._is_ambient_gh_cli_entry(
                                 str(_entry.get("source", "") or ""),
                                 str(_entry.get("label", "") or ""),
                                 str(_entry.get("key_source", "") or ""),
                             )
-                            for _entry in _entries
+                            for _entry in _ac._entries
                         )
                         if _has_explicit_cred:
-                            _canonical_pid = _resolve_provider_alias(str(_pid))
-                            if _is_known_model_provider(_canonical_pid):
+                            _canonical_pid = _ac._resolve_provider_alias(str(_pid))
+                            if _ac._is_known_model_provider(_canonical_pid):
                                 detected_providers.add(_canonical_pid)
         except Exception:
             logger.debug("Failed to inspect credential_pool from auth store")
@@ -413,7 +424,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
 
                 hermes_env_path = _gah2() / ".env"
             except ImportError:
-                hermes_env_path = _DEFAULT_HERMES_HOME / ".env"
+                hermes_env_path = _ac._DEFAULT_HERMES_HOME / ".env"
             env_keys = {}
             if hermes_env_path.exists():
                 try:
@@ -425,7 +436,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 except Exception:
                     logger.debug("Failed to parse hermes env file")
             all_env = {**env_keys}
-            _anthropic_env_vars = _get_anthropic_fallback_env_vars()
+            _anthropic_env_vars = _ac._get_anthropic_fallback_env_vars()
             for k in (
                 *_anthropic_env_vars,
                 "OPENAI_API_KEY",
@@ -446,7 +457,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
             ):
-                val = _thread_local_env_value(k).strip()
+                val = _ac._thread_local_env_value(k).strip()
                 if val:
                     all_env[k] = val
             if any(all_env.get(env_var) for env_var in _anthropic_env_vars):
@@ -502,7 +513,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         # without setting the corresponding env var. (#604)
         #
         # Gating: only seed picker groups for keys whose canonical id is known
-        # to ``_PROVIDER_MODELS`` / ``_PROVIDER_DISPLAY``, or whose value is a
+        # to ``_ac._PROVIDER_MODELS`` / ``_ac._PROVIDER_DISPLAY``, or whose value is a
         # dict-shaped provider config (custom/local). Scalar siblings under
         # ``providers:`` (e.g. ``providers.only_configured: true``) are config
         # flags, not providers, and must not render as phantom picker groups
@@ -514,32 +525,32 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         # and a phantom ``Opencode_Go`` group for the config-key form (#1568).
         # The same applies to mixed-case ids like ``OpenCode-Go`` and to
         # legitimate aliases like ``z-ai`` → ``zai``.
-        _cfg_providers = _get_providers_cfg()
+        _cfg_providers = _ac._get_providers_cfg()
         # Map canonical provider IDs back to raw config keys so the
         # generic-provider branch can preserve mixed-case/underscore
         # provider_cfg values (#2245).
         _canonical_to_raw_provider_key: dict[str, str] = {}
         if isinstance(_cfg_providers, dict):
             for _pid_key, _provider_cfg in _cfg_providers.items():
-                _canonical = _canonicalise_provider_id(_pid_key)
+                _canonical = _ac._canonicalise_provider_id(_pid_key)
                 if not _canonical:
                     continue
 
-                # See the gating comment on the block above. ``_PROVIDER_MODELS``
-                # / ``_PROVIDER_DISPLAY`` membership accepts known providers and
+                # See the gating comment on the block above. ``_ac._PROVIDER_MODELS``
+                # / ``_ac._PROVIDER_DISPLAY`` membership accepts known providers and
                 # aliases; ``isinstance(_provider_cfg, dict)`` accepts custom
                 # entries that supply their own models/api_key/base_url. (#2399)
                 _is_known_provider = (
-                    _canonical in _PROVIDER_MODELS
-                    or _canonical in _PROVIDER_DISPLAY
-                    or _is_plugin_model_provider(_canonical)
+                    _canonical in _ac._PROVIDER_MODELS
+                    or _canonical in _ac._PROVIDER_DISPLAY
+                    or _ac._is_plugin_model_provider(_canonical)
                 )
                 _is_provider_config = isinstance(_provider_cfg, dict)
                 _has_provider_route = False
                 if _is_provider_config:
                     _has_provider_route = any(
-                        str(_provider_cfg.get(_route_key) or "").strip()
-                        for _route_key in ("api", "base_url", "api_key", "key_env")
+                        str(_provider_cfg.get(_ac._route_key) or "").strip()
+                        for _ac._route_key in ("api", "base_url", "api_key", "key_env")
                     )
                 # A models-only provider config (no api/base_url/api_key/key_env)
                 # is only admitted as evidence when it's the active/configured
@@ -554,7 +565,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     and _is_provider_config
                     and isinstance(_provider_cfg.get("models"), (dict, list))
                     and _provider_cfg["models"]
-                    and _canonical == _canonicalise_provider_id(active_provider)
+                    and _canonical == _ac._canonicalise_provider_id(active_provider)
                 )
                 # A known provider listed in config.yaml without route
                 # configuration should only appear in the picker when it was
@@ -572,10 +583,10 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 # canonical form in detected_providers (e.g. ``x-ai`` added
                 # by a prior loop iteration) also matches (#6338).
                 _resolved_detected = {
-                    _resolve_provider_alias(_pid) for _pid in detected_providers
+                    _ac._resolve_provider_alias(_pid) for _pid in detected_providers
                 }
                 _already_credentialed = (
-                    _resolve_provider_alias(_canonical) in _resolved_detected
+                    _ac._resolve_provider_alias(_canonical) in _resolved_detected
                     or _canonical in _resolved_detected
                 )
                 _admit_as_known = _is_known_provider and _already_credentialed
@@ -586,14 +597,14 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 detected_providers.add(_canonical)
 
         def _configured_provider_for_base_url(base_url: object) -> str:
-            target = _normalize_base_url_for_match(base_url)
+            target = _ac._normalize_base_url_for_match(base_url)
             if not target:
                 return ""
 
             if isinstance(model_cfg, dict):
-                model_base_url = _normalize_base_url_for_match(model_cfg.get("base_url"))
+                model_base_url = _ac._normalize_base_url_for_match(model_cfg.get("base_url"))
                 if model_base_url == target:
-                    provider_hint = _resolve_configured_provider_id(
+                    provider_hint = _ac._resolve_configured_provider_id(
                         model_cfg.get("provider"),
                         _ac.cfg,
                         base_url=base_url,
@@ -606,11 +617,11 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 for provider_key, provider_cfg in providers_cfg.items():
                     if not isinstance(provider_cfg, dict):
                         continue
-                    provider_base_url = _normalize_base_url_for_match(
+                    provider_base_url = _ac._normalize_base_url_for_match(
                         provider_cfg.get("base_url")
                     )
                     if provider_base_url == target:
-                        provider_hint = _resolve_provider_alias(provider_key)
+                        provider_hint = _ac._resolve_provider_alias(provider_key)
                         if provider_hint:
                             return str(provider_hint).strip().lower()
 
@@ -619,12 +630,12 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 for entry in custom_providers_cfg:
                     if not isinstance(entry, dict):
                         continue
-                    entry_base_url = _normalize_base_url_for_match(entry.get("base_url"))
+                    entry_base_url = _ac._normalize_base_url_for_match(entry.get("base_url"))
                     if entry_base_url != target:
                         continue
                     entry_name = str(entry.get("name") or "").strip()
                     if entry_name:
-                        return _custom_provider_slug_from_name(entry_name)
+                        return _ac._custom_provider_slug_from_name(entry_name)
                     return "custom"
 
             return ""
@@ -744,7 +755,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 req.add_header("User-Agent", "OpenAI/Python 1.0")
                 for k, v in headers.items():
                     req.add_header(k, v)
-                with urllib.request.urlopen(req, timeout=CUSTOM_MODELS_ENDPOINT_TIMEOUT_SECONDS) as response:  # nosec B310
+                with urllib.request.urlopen(req, timeout=_ac.CUSTOM_MODELS_ENDPOINT_TIMEOUT_SECONDS) as response:  # nosec B310
                     data = json.loads(response.read().decode("utf-8"))
                 return _extract_model_entries_from_payload(data, provider), None
             except urllib.error.HTTPError as exc:
@@ -813,7 +824,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     "API_KEY",
                 )
                 for key in api_key_vars:
-                    api_key = (all_env.get(key) or _thread_local_env_value(key) or "").strip()
+                    api_key = (all_env.get(key) or _ac._thread_local_env_value(key) or "").strip()
                     if api_key:
                         break
 
@@ -846,7 +857,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 if not isinstance(_cp, dict):
                     continue
                 _cp_name = (_cp.get("name") or "").strip()
-                _slug = _custom_provider_slug_from_name(_cp_name) if _cp_name else None
+                _slug = _ac._custom_provider_slug_from_name(_cp_name) if _cp_name else None
                 if _slug and _slug not in _named_custom_groups:
                     _named_custom_groups[_slug] = (_cp_name, [])
 
@@ -855,14 +866,14 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 if not _cp_api_key:
                     _cp_key_env = str(_cp.get("key_env") or "").strip()
                     if _cp_key_env:
-                        _cp_api_key = _thread_local_env_value(_cp_key_env).strip()
+                        _cp_api_key = _ac._thread_local_env_value(_cp_key_env).strip()
                 # Fallback: check credential pool for both api_key and base_url
                 if (not _cp_api_key or not _cp_base_url) and _slug:
                     try:
                         from api.config import _has_explicit_pool_credentials
-                        if _has_explicit_pool_credentials(_slug):
+                        if _ac._has_explicit_pool_credentials(_slug):
                             from agent.credential_pool import load_pool
-                            _resolved = _resolve_provider_alias(_slug)
+                            _resolved = _ac._resolve_provider_alias(_slug)
                             _pool = load_pool(_resolved)
                             if _pool:
                                 _entry = _pool.select()
@@ -928,7 +939,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 _cp_model = _cp.get("model", "")
                 if _cp_model:
                     _cp_model_ids.append(_cp_model)
-                for _cp_model_id in _configured_model_ids(_cp.get("models")):
+                for _cp_model_id in _ac._configured_model_ids(_cp.get("models")):
                     if _cp_model_id not in _cp_model_ids:
                         _cp_model_ids.append(_cp_model_id)
 
@@ -963,8 +974,8 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
             if not _has_unnamed:
                 detected_providers.discard("custom")
 
-        _named_custom_slugs = _named_custom_provider_slugs(_ac.cfg)
-        _base_matched_named_slug = _named_custom_provider_slug_for_base_url(cfg_base_url, _ac.cfg)
+        _named_custom_slugs = _ac._named_custom_provider_slugs(_ac.cfg)
+        _base_matched_named_slug = _ac._named_custom_provider_slug_for_base_url(cfg_base_url, _ac.cfg)
         if _base_matched_named_slug and _named_custom_slugs:
             for _pid in list(detected_providers):
                 _pid_norm = str(_pid or "").strip().lower()
@@ -985,7 +996,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 # exclude detected ``opencode-go`` because configured_providers
                 # only has the underscore-variant key from config.yaml.
                 configured_providers.update(
-                    _canonicalise_provider_id(k) or k for k in cfg_providers.keys()
+                    _ac._canonicalise_provider_id(k) or k for k in cfg_providers.keys()
                 )
             # Only show providers that are both detected and configured
             detected_providers = detected_providers.intersection(configured_providers)
@@ -1000,7 +1011,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         if detected_providers:
             _canonicalised_detected = set()
             for _pid in detected_providers:
-                _c = _canonicalise_provider_id(_pid) or _pid
+                _c = _ac._canonicalise_provider_id(_pid) or _pid
                 _canonicalised_detected.add(_c)
             detected_providers = _canonicalised_detected
 
@@ -1033,7 +1044,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 allow_empty: bool = False,
             ) -> None:
                 picker_models = copy.deepcopy(raw_models or [])
-                if _is_openai_family_provider(provider_id):
+                if _ac._is_openai_family_provider(provider_id):
                     for _model in picker_models:
                         if not isinstance(_model, dict):
                             continue
@@ -1042,13 +1053,13 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                             continue
                         _model["supports_fast_tier"] = (
                             str(
-                                _resolve_main_model_fast_mode_overrides(_model_id, provider_id).get("service_tier", "")
+                                _ac._resolve_main_model_fast_mode_overrides(_model_id, provider_id).get("service_tier", "")
                             ).strip().lower()
                             == "priority"
                         )
                 if apply_prefix:
-                    picker_models = _apply_provider_prefix(picker_models, provider_id, active_provider)
-                visible_models, extra_models = _split_picker_overflow_models(
+                    picker_models = _ac._apply_provider_prefix(picker_models, provider_id, active_provider)
+                visible_models, extra_models = _ac._split_picker_overflow_models(
                     picker_models,
                     selected_model_id=_picker_selected_model_id,
                     provider_id=provider_id,
@@ -1103,7 +1114,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                                 apply_prefix=False,
                             )
                     continue
-                provider_name = _effective_provider_display_name(pid, _PROVIDER_DISPLAY)
+                provider_name = _ac._effective_provider_display_name(pid, _ac._PROVIDER_DISPLAY)
                 if pid == "openrouter":
                     # OpenRouter has two model surfaces:
                     #   (1) curated tool-supporting catalog via hermes_cli.models.fetch_openrouter_models()
@@ -1116,7 +1127,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     # Strategy: take the live curated list as the base, then augment with a
                     # separate live-fetch of OpenRouter's /v1/models filtered to free-tier-only.
                     # Free-tier entries get a "(free)" label suffix so the picker is honest about
-                    # what the user is selecting. Falls back to the static _FALLBACK_MODELS list
+                    # what the user is selecting. Falls back to the static _ac._FALLBACK_MODELS list
                     # when both live fetches fail (offline, transient API error, test env).
                     raw_models = []
                     seen_ids = set()
@@ -1125,7 +1136,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                             fetch_openrouter_models as _fetch_or_models,
                         )
                         live_curated = _fetch_or_models() or []
-                        for mid, _desc in live_curated:
+                        for mid, _ac._desc in live_curated:
                             if mid and mid not in seen_ids:
                                 seen_ids.add(mid)
                                 # Ship the friendly display name (e.g. "Ox Alpha")
@@ -1133,7 +1144,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                                 # of the raw id, so the picker search matches what
                                 # users see in Hermes Desktop (#7228).
                                 raw_models.append(
-                                    {"id": mid, "label": _openrouter_model_display_name(mid)}
+                                    {"id": mid, "label": _ac._openrouter_model_display_name(mid)}
                                 )
                     except Exception:
                         logger.warning("Failed to load OpenRouter curated catalog from hermes_cli")
@@ -1149,8 +1160,8 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                         )
                         free_tier_models = []
                         selected_free_tier_model = None
-                        with _urlreq.urlopen(_req, timeout=8.0) as _resp:
-                            _payload = json.loads(_resp.read().decode())
+                        with _urlreq.urlopen(_req, timeout=8.0) as _ac._resp:
+                            _payload = json.loads(_ac._resp.read().decode())
                         for _item in _payload.get("data", []) or []:
                             if not isinstance(_item, dict):
                                 continue
@@ -1184,14 +1195,14 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                                 _label = f"{_label} (free)"
                             _entry = {"id": _mid, "label": _label}
                             free_tier_models.append(_entry)
-                            if _model_matches_picker_selection(
+                            if _ac._model_matches_picker_selection(
                                 _mid,
                                 _picker_selected_model_id,
                                 "openrouter",
                             ):
                                 selected_free_tier_model = _entry
-                        if len(free_tier_models) > _OPENROUTER_FREE_TIER_AUGMENT_CAP:
-                            free_tier_models = free_tier_models[:_OPENROUTER_FREE_TIER_AUGMENT_CAP]
+                        if len(free_tier_models) > _ac._OPENROUTER_FREE_TIER_AUGMENT_CAP:
+                            free_tier_models = free_tier_models[:_ac._OPENROUTER_FREE_TIER_AUGMENT_CAP]
                             if (
                                 selected_free_tier_model
                                 and not any(
@@ -1212,7 +1223,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                         # into the module-level catalog.
                         raw_models = [
                             {"id": m["id"], "label": m["label"]}
-                            for m in _FALLBACK_MODELS
+                            for m in _ac._FALLBACK_MODELS
                             if m.get("provider") == "OpenRouter"
                         ]
 
@@ -1235,7 +1246,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     # Codex account catalogs drift independently from WebUI
                     # releases, so ask the agent's resolver first and merge the
                     # visible local cache below before falling back to WebUI's
-                    # static _PROVIDER_MODELS snapshot.
+                    # static _ac._PROVIDER_MODELS snapshot.
                     raw_models = []
                     codex_ids = []
                     try:
@@ -1255,7 +1266,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     ]
 
                     if not raw_models:
-                        raw_models = copy.deepcopy(_PROVIDER_MODELS.get("openai-codex", []))
+                        raw_models = copy.deepcopy(_ac._PROVIDER_MODELS.get("openai-codex", []))
 
                     if raw_models:
                         _append_picker_group(provider_name, pid, raw_models)
@@ -1286,13 +1297,13 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                         live_fetch_failed = True
 
                     if live_ids:
-                        featured_ids, extras_ids = _build_nous_featured_set(
+                        featured_ids, extras_ids = _ac._build_nous_featured_set(
                             live_ids,
                             selected_model_id=_picker_selected_model_id,
                         )
                         ordered_ids = featured_ids + extras_ids
                         raw_models = [
-                            {"id": f"@nous:{mid}", "label": _format_nous_label(mid)}
+                            {"id": f"@nous:{mid}", "label": _ac._format_nous_label(mid)}
                             for mid in ordered_ids
                         ]
                     elif not live_fetch_failed:
@@ -1315,7 +1326,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                         # empty in this degraded state. This matches pre-#1538
                         # behaviour for environments without hermes_cli (test
                         # envs, package mismatches, isolated WebUI builds).
-                        raw_models = copy.deepcopy(_PROVIDER_MODELS.get("nous", []))
+                        raw_models = copy.deepcopy(_ac._PROVIDER_MODELS.get("nous", []))
 
                     if raw_models:
                         _append_picker_group(
@@ -1349,10 +1360,10 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                         # Fallback: fetch /models directly from the configured
                         # base URL. Looks for the URL in either
                         # `_ac.cfg["providers"]["lmstudio"]["base_url"]` or
-                        # `_ac.cfg["model"]["base_url"]` (via _get_provider_base_url),
+                        # `_ac.cfg["model"]["base_url"]` (via _ac._get_provider_base_url),
                         # so the historical model-block config shape still works.
-                        lm_cfg = _get_provider_cfg("lmstudio")
-                        lm_base_url = _get_provider_base_url("lmstudio") or ""
+                        lm_cfg = _ac._get_provider_cfg("lmstudio")
+                        lm_base_url = _ac._get_provider_base_url("lmstudio") or ""
                         lm_api_key = str(lm_cfg.get("api_key") or "").strip()
                         if lm_base_url:
                             headers = {"User-Agent": "OpenAI/Python 1.0"}
@@ -1375,18 +1386,18 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     if raw_models:
                         _append_picker_group(provider_name, pid, raw_models)
                 elif (
-                    pid in _PROVIDER_MODELS
-                    or pid in _PROVIDER_DISPLAY
+                    pid in _ac._PROVIDER_MODELS
+                    or pid in _ac._PROVIDER_DISPLAY
                     or pid in _canonical_to_raw_provider_key
-                    or _is_plugin_model_provider(pid)
+                    or _ac._is_plugin_model_provider(pid)
                 ):
                     # Look up provider_cfg using the original raw key from
                     # config.yaml so that mixed-case / underscore keys like
                     # ``CLIPpoxy`` or ``snake_case_provider`` still resolve
                     # (#2245).  Fall back to the canonical pid for providers
-                    # that appear in _PROVIDER_MODELS but not in _ac.cfg.
+                    # that appear in _ac._PROVIDER_MODELS but not in _ac.cfg.
                     _raw_key = _canonical_to_raw_provider_key.get(pid, pid)
-                    provider_cfg = _get_provider_cfg(_raw_key)
+                    provider_cfg = _ac._get_provider_cfg(_raw_key)
                     raw_models = []
 
                     # User-configured model allowlists are explicit local
@@ -1398,24 +1409,24 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     # that as an allowlist collapsed the Copilot picker to
                     # whichever model had local settings. Only Copilot skips the
                     # config-models allowlist branch and asks Hermes CLI for the
-                    # live catalog first (static _PROVIDER_MODELS is fallback only).
+                    # live catalog first (static _ac._PROVIDER_MODELS is fallback only).
                     _uses_models_as_settings_map = (
                         pid == "copilot"
-                        or _provider_models_are_discovered_catalog(provider_cfg)
+                        or _ac._provider_models_are_discovered_catalog(provider_cfg)
                     )
                     if (
                         not _uses_models_as_settings_map
                         and isinstance(provider_cfg, dict)
                         and "models" in provider_cfg
                     ):
-                        raw_models = _configured_model_options(provider_cfg.get("models"))
+                        raw_models = _ac._configured_model_options(provider_cfg.get("models"))
 
                     if not raw_models:
                         if pid == "moa":
                             raw_models = _moa_preset_models_from_config(_ac.cfg)
                         elif (
                             pid == "opencode-go"
-                            and not _hermes_cli_supports_opencode_go_live_catalog()
+                            and not _ac._hermes_cli_supports_opencode_go_live_catalog()
                         ):
                             # Before core v0.20.5 this resolver returned the
                             # generic public catalog, including models that
@@ -1424,24 +1435,24 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                         else:
                             raw_models = _models_from_live_provider_ids(
                                 pid,
-                                _read_live_provider_model_ids(pid),
+                                _ac._read_live_provider_model_ids(pid),
                             )
                             if (
                                 not raw_models
-                                and _provider_models_are_discovered_catalog(provider_cfg)
+                                and _ac._provider_models_are_discovered_catalog(provider_cfg)
                             ):
                                 # A transient live-catalog failure must not drop a
                                 # provider's persisted discovered models (the empty
                                 # result would then be cached for up to 24h). Fall
                                 # back to the configured discovered IDs, ordered
                                 # first, merged with any static fallback (deduped).
-                                raw_models = _merge_model_option_rows(
-                                    _configured_model_options(provider_cfg.get("models")),
-                                    copy.deepcopy(_PROVIDER_MODELS.get(pid, [])),
+                                raw_models = _ac._merge_model_option_rows(
+                                    _ac._configured_model_options(provider_cfg.get("models")),
+                                    copy.deepcopy(_ac._PROVIDER_MODELS.get(pid, [])),
                                 )
 
                     if not raw_models:
-                        raw_models = copy.deepcopy(_PROVIDER_MODELS.get(pid, []))
+                        raw_models = copy.deepcopy(_ac._PROVIDER_MODELS.get(pid, []))
 
                     detected_models = auto_detected_models_by_provider.get(pid, [])
                     if detected_models and not raw_models:
@@ -1451,7 +1462,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     detected_models = auto_detected_models_by_provider.get(pid)
                     if detected_models:
                         models_for_group = copy.deepcopy(detected_models)
-                    elif auto_detected_models and (pid == "custom" or _is_known_model_provider(pid)):
+                    elif auto_detected_models and (pid == "custom" or _ac._is_known_model_provider(pid)):
                         # Don't fall back to the global auto_detected_models
                         # list for the bare "custom" PID when the active
                         # provider is something concrete (e.g. ai-gateway,
@@ -1472,13 +1483,13 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                         # any future unknown id renders as a phantom provider
                         # carrying the active endpoint's entire model catalog.
                         # Such ids are dropped upstream by
-                        # _is_known_model_provider() in the pool-detection
+                        # _ac._is_known_model_provider() in the pool-detection
                         # loop; this omission is belt-and-braces matching the
                         # #1572/#7372 "omit rather than misattribute" posture.
                         models_for_group = []
                     if models_for_group:
                         # Per-group deep copy so subsequent mutation by
-                        # _deduplicate_model_ids() (which prefixes ids with
+                        # _ac._deduplicate_model_ids() (which prefixes ids with
                         # @provider_id:) does not bleed into other groups
                         # that also fall through to this branch (#1511 root
                         # cause: multiple unconfigured providers all sharing
@@ -1523,8 +1534,8 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
             # the wrong surface to surface it; we'd rather skip injection
             # and emit a warning so the underlying config issue is logged.
             _looks_like_provider_id = (
-                str(default_model).strip().lower().replace("_", "-") in _PROVIDER_DISPLAY
-                or _canonicalise_provider_id(default_model) in _PROVIDER_DISPLAY
+                str(default_model).strip().lower().replace("_", "-") in _ac._PROVIDER_DISPLAY
+                or _ac._canonicalise_provider_id(default_model) in _ac._PROVIDER_DISPLAY
             )
             if _looks_like_provider_id:
                 logger.warning(
@@ -1543,7 +1554,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                 if _norm_model_id(default_model) not in all_ids_norm:
                     label = _ac._get_label_for_model(default_model, groups)
                     target_display = (
-                        _PROVIDER_DISPLAY.get(active_provider, active_provider or "").lower()
+                        _ac._PROVIDER_DISPLAY.get(active_provider, active_provider or "").lower()
                         if active_provider
                         else ""
                     )
@@ -1565,7 +1576,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         # Post-process: ensure model IDs are globally unique across groups.
         # When multiple providers expose the same bare model ID, prefix
         # collisions with @provider_id: so the frontend can distinguish them.
-        _deduplicate_model_ids(groups)
+        _ac._deduplicate_model_ids(groups)
 
         # Defense-in-depth: drop any optgroup that ended up with zero models
         # — those are pure UI noise. A zero-model group typically means a
@@ -1589,7 +1600,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
             _pool = auth_store.get("credential_pool", {}) if isinstance(auth_store, dict) else {}
             if isinstance(_pool, dict):
                 for _pid in _pool:
-                    _providers_with_keys.add(_resolve_provider_alias(str(_pid)))
+                    _providers_with_keys.add(_ac._resolve_provider_alias(str(_pid)))
         except Exception:
             pass
         try:
@@ -1597,7 +1608,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
             if isinstance(_cfg_providers, dict):
                 for _pk, _pv in _cfg_providers.items():
                     if isinstance(_pv, dict) and (_pv.get("api_key") or _pv.get("key_env")):
-                        _providers_with_keys.add(_resolve_provider_alias(str(_pk)))
+                        _providers_with_keys.add(_ac._resolve_provider_alias(str(_pk)))
         except Exception:
             pass
 
@@ -1816,7 +1827,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     else _nullcontext()
                 )
                 with _sync_scope:
-                    result = _invoke_models_rebuild(_build_available_models_uncached)
+                    result = _ac._invoke_models_rebuild(_build_available_models_uncached)
             except BaseException:
                 # Always reset the flag so waiting threads don't block for 60s
                 with _ac._cache_build_cv:
@@ -1868,9 +1879,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         box: dict = {}
 
         def _publish_models_result(result):
-    # (legacy global removed -- using _ac proxy)
-    # (legacy global removed -- using _ac proxy)
-    # (legacy global removed -- using _ac proxy)
+            # (legacy inner global removed — using _ac proxy)
             with _ac._cache_build_cv:
                 published_at = time.monotonic()
                 _ac._available_models_cache = result
@@ -1890,7 +1899,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
                     _ac._cache_build_cv.notify_all()
 
         def _clear_build_in_progress():
-    # (legacy global removed -- using _ac proxy)
+            # (legacy inner global removed — using _ac proxy)
             with _ac._cache_build_cv:
                 _ac._cache_build_in_progress = False
                 _ac._cache_build_cv.notify_all()
@@ -1916,7 +1925,7 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
             )
             with _worker_scope:
                 try:
-                    box["result"] = _invoke_models_rebuild(_build_available_models_uncached)
+                    box["result"] = _ac._invoke_models_rebuild(_build_available_models_uncached)
                 except Exception as exc:  # noqa: BLE001 — propagated to caller
                     box["error"] = exc
                 finally:
