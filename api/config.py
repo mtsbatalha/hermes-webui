@@ -480,49 +480,6 @@ def get_config_for_profile_home(profile_home: "Path | str | None") -> dict:
     return profile_cfg
 
 
-def _config_for_yaml_save(config_data: dict) -> dict:
-    """Return a YAML-safe config copy without runtime-only expanded defaults."""
-    if not isinstance(config_data, dict):
-        return {}
-    data = copy.deepcopy(config_data)
-    agent_cfg = data.get("agent")
-    if isinstance(agent_cfg, dict):
-        personalities = agent_cfg.get("personalities")
-        if isinstance(personalities, dict):
-            custom_personalities = {
-                name: value
-                for name, value in personalities.items()
-                if _DEFAULT_AGENT_PERSONALITIES.get(name) != value
-            }
-            if custom_personalities:
-                agent_cfg["personalities"] = custom_personalities
-            else:
-                agent_cfg.pop("personalities", None)
-        if not agent_cfg:
-            data.pop("agent", None)
-    return data
-
-
-def _save_yaml_config_file(config_path: Path, config_data: dict) -> None:
-    try:
-        from api import yaml_compat as _yaml
-    except ImportError as exc:
-        raise RuntimeError("PyYAML is required to write Hermes config.yaml") from exc
-
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    _paths._atomic_write_text(
-        config_path,
-        _yaml.safe_dump(_config_for_yaml_save(config_data), sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
-    # Invalidate the memoized parse for this path so the next read re-parses the
-    # bytes we just wrote. mtime_ns+size keying normally catches edits, but a
-    # WebUI save that preserves size with a coarse/unchanged mtime could otherwise
-    # serve a stale dict (#4650 review) — evicting on our own write closes that gap.
-    with _yaml_file_cache_lock:
-        _yaml_file_cache.pop(str(config_path), None)
-
-
 # Initial load
 reload_config()
 cfg = _cfg_cache  # alias for backward compat with existing references
