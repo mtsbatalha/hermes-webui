@@ -352,6 +352,11 @@ def test_every_catalog_dotted_id_loses_its_routing_prefix():
     import re as _re
 
     config_src = (REPO_ROOT / "api" / "config.py").read_text(encoding="utf-8")
+    # Catalog was extracted to api/_cfg/providers_catalog.py (PR4) — scrape both
+    # so the guard stays blind to the split and still covers the 75 dotted IDs.
+    catalog_path = REPO_ROOT / "api" / "_cfg" / "providers_catalog.py"
+    catalog_src = catalog_path.read_text(encoding="utf-8") if catalog_path.exists() else ""
+    combined_src = config_src + "\n" + catalog_src
 
     # Derive the real allow-lists out of production source, don't retype them.
     def _set_literal(marker: str) -> set[str]:
@@ -365,7 +370,7 @@ def test_every_catalog_dotted_id_loses_its_routing_prefix():
     namespace_heads = regions | vendors
 
     ids = {
-        i for i in _re.findall(r"""['"]id['"]\s*:\s*['"]([^'"]+)['"]""", config_src)
+        i for i in _re.findall(r"""['"]id['"]\s*:\s*['"]([^'"]+)['"]""", combined_src)
         if "." in i
     }
     assert len(ids) > 20, f"catalog scrape found only {len(ids)} dotted ids"
