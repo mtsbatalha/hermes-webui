@@ -790,91 +790,15 @@ from api._cfg.provider_helpers import (  # noqa: F401
 
 
 from api._cfg.model_labels import _seed_provider_models_from_core  # noqa: F401
-_AMBIENT_GH_CLI_MARKERS = frozenset({"gh_cli", "gh auth token"})
-
-# Environment variable sources that are auto-detected and should be filtered
-# when the token is a classic PAT (ghp_*) that Copilot API doesn't support.
-# Note: COPILOT_GITHUB_TOKEN is NOT included here - it's user-specific config.
-_AMBIENT_GH_ENV_SOURCES = frozenset({"env:github_token", "env:gh_token"})
-
-
-def _is_ambient_gh_cli_entry(source: str, label: str, key_source: str) -> bool:
-    """True when a credential-pool entry is a seeded gh-cli token rather than
-    one the user added explicitly. Filter these so Copilot doesn't appear in
-    the dropdown just because `gh` is installed on the system.
-
-    Also filters GITHUB_TOKEN and GH_TOKEN env var entries, which are
-    auto-detected from the environment and should not cause Copilot to appear
-    in the picker when the token is a classic PAT (ghp_*) that Copilot API
-    doesn't support.
-
-    Note: COPILOT_GITHUB_TOKEN is NOT filtered - it's user-specific config
-    that should always be respected.
-    """
-    source_lower = source.strip().lower()
-    return (
-        source_lower in _AMBIENT_GH_CLI_MARKERS
-        or source_lower in _AMBIENT_GH_ENV_SOURCES
-        or label.strip().lower() == "gh auth token"
-        or key_source.strip().lower() == "gh auth token"
-    )
-
-
-def _format_ollama_label(mid: str) -> str:
-    """Turn an Ollama model id (Ollama tag format) into a readable display label.
-
-    Examples: 'kimi-k2.5' → 'Kimi K2.5', 'qwen3-vl:235b-instruct' → 'Qwen3 VL (235B Instruct)'
-    """
-    name_part, _, variant = mid.partition(":")
-
-    def _fmt(s: str) -> str:
-        tokens = s.replace("-", " ").replace("_", " ").split()
-        out = []
-        for t in tokens:
-            alpha_only = t.replace(".", "")
-            if alpha_only.isalpha() and len(t) <= 3:
-                out.append(t.upper())  # short acronym: glm → GLM, vl → VL, gpt → GPT
-            elif alpha_only.isalnum() and alpha_only and alpha_only[0].isdigit():
-                out.append(t.upper())  # size param: 235b → 235B, 1t → 1T
-            else:
-                out.append(t[0].upper() + t[1:] if t else t)  # capitalize: kimi → Kimi
-        return " ".join(out)
-
-    label = _fmt(name_part)
-    if variant:
-        label += f" ({_fmt(variant)})"
-    return label
-
-
-def _format_nous_label(mid: str) -> str:
-    """Turn a Nous Portal model id into a readable display label.
-
-    Nous IDs are ``<vendor>/<model>[:<variant>]`` (e.g. ``anthropic/claude-opus-4.7``);
-    drop the vendor namespace, prettify the model name with the same token
-    rules as :func:`_format_ollama_label` (short acronyms uppercase, size
-    suffixes uppercase, capitalize the rest), then append ``" (via Nous)"``
-    so the entry is visually distinct from same-named models in other
-    provider groups (e.g. direct Anthropic).
-
-    Examples (matches the helper's actual output — labels are produced by
-    :func:`_format_ollama_label`'s token rules, so 3-letter tokens like
-    ``GPT`` and ``PRO`` render uppercase)::
-
-        anthropic/claude-opus-4.7         -> Claude Opus 4.7 (via Nous)
-        openai/gpt-5.4-mini               -> GPT 5.4 Mini (via Nous)
-        google/gemini-3.1-pro-preview     -> Gemini 3.1 PRO Preview (via Nous)
-        moonshotai/kimi-k2.6              -> Kimi K2.6 (via Nous)
-        qwen/qwen3.5-plus-02-15           -> Qwen3.5 Plus 02 15 (via Nous)
-        nvidia/nemotron-3-super-120b-a12b -> Nemotron 3 Super 120B A12b (via Nous)
-        minimax/minimax-m2.5:free         -> MiniMax M2.5 (Free) (via Nous)
-    """
-    name_part = mid.split("/", 1)[-1] if "/" in mid else mid
-    # MiniMax-CN ids come back lowercase on the live wire (`minimax-m2.5`) but
-    # the curated label convention is mixed-case "MiniMax M2.5" — match that.
-    if name_part.lower().startswith("minimax"):
-        name_part = "MiniMax" + name_part[len("minimax"):]
-    base = _format_ollama_label(name_part)
-    return f"{base} (via Nous)"
+# Format / ambient helpers (split: api/_cfg/format_labels.py) ------------------------------
+# Canonical implementations live in api/_cfg/format_labels.py; re-exported here.
+from api._cfg.format_labels import (  # noqa: F401
+    _AMBIENT_GH_CLI_MARKERS,
+    _AMBIENT_GH_ENV_SOURCES,
+    _format_nous_label,
+    _format_ollama_label,
+    _is_ambient_gh_cli_entry,
+)
 
 
 # Picker helpers (split: api/_cfg/picker_helpers.py) ---------------------------------------------------
@@ -992,138 +916,14 @@ from api._cfg.custom_bundles import (  # noqa: F401  pylint: disable=unused-impo
     apply_custom_provider_connection_authority,
 )
 
-_ACP_SUBPROCESS_PROVIDERS = frozenset({"cursor-acp", "copilot-acp"})
-
-
-def model_with_provider_context(model_id: str, model_provider: str | None = None) -> str:
-    """Return the model string to pass to ``resolve_model_provider()``.
-
-    Session persistence keeps the user's selected provider in ``model_provider``
-    instead of forcing every selected model into ``@provider:model`` form. At
-    runtime, however, ``resolve_model_provider()`` still understands that
-    internal disambiguation form, so use it only when the provider context is
-    needed to route away from the current default provider.
-    """
-    model = str(model_id or "").strip()
-    provider = str(model_provider or "").strip().lower()
-    if not model or not provider or provider == "default" or model.startswith("@"):
-        return model
-
-    model_cfg = cfg.get("model", {})
-    config_provider = None
-    if isinstance(model_cfg, dict):
-        config_provider = str(model_cfg.get("provider") or "").strip().lower()
-
-    # ACP subprocess providers always need the explicit hint — their slash IDs
-    # are not OpenRouter paths and must not inherit config_provider routing.
-    if provider in _ACP_SUBPROCESS_PROVIDERS:
-        return f"@{provider}:{model}"
-
-    # Plugin-only model providers (e.g. 9router, and other model plugins whose
-    # slugs are not in the static provider tables) route through the plugin, not
-    # the default provider. This MUST come before the `provider == config_provider`
-    # bare-passthrough below: when a plugin provider is ALSO the configured
-    # provider, returning a bare model would drop the '@plugin:' hint and the model
-    # would be sent to the wrong backend. Emit the explicit hint so it stays
-    # routable to the plugin that surfaced it. (#5909 gate finding)
-    if _is_plugin_model_provider(provider):
-        return f"@{provider}:{model}"
-
-    # Codex live/cache models are intentionally absent from the static catalog,
-    # so bare same-provider IDs can be claimed by overlapping providers.* entries.
-    if provider == "openai-codex":
-        return f"@{provider}:{model}"
-
-    # If the selected provider is already the configured provider, leaving the
-    # model bare preserves provider-specific base_url/proxy settings.
-    if provider == config_provider:
-        return model
-
-    # OpenRouter selections with slash IDs are explicit provider/model paths.
-    if provider == "openrouter":
-        return f"@{provider}:{model}"
-
-    # Explicit providers configured in config.yaml (for example local llama.cpp,
-    # Ollama, LM Studio, vLLM, or other OpenAI-compatible endpoints) must keep
-    # their provider hint even when the model ID is HuggingFace-style and
-    # contains '/'. Otherwise a selected local model such as
-    # 'unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL' inherits the default provider
-    # (e.g. openai-codex) and is sent to the wrong backend.
-    providers_cfg = cfg.get("providers") if isinstance(cfg, dict) else {}
-    if isinstance(providers_cfg, dict) and provider in providers_cfg:
-        return f"@{provider}:{model}"
-
-    # (Plugin-only provider routing handled above, before the config_provider
-    # bare-passthrough.)
-
-    # For non-OpenRouter slash IDs without an explicit configured provider,
-    # keep the ID intact so existing custom/proxy base_url routing and
-    # portal-provider handling remain in charge — UNLESS the session provider
-    # is a known routable provider that differs from the profile default.
-    # Dropping the hint there lets the default provider's base_url win and
-    # 404s (e.g. a Nous portal row `upstage/solar-pro4:free` under an
-    # xai-oauth default gets sent to api.x.ai — #7333). Emit the explicit
-    # hint for known static/portal providers and named custom providers
-    # (including `custom:<slug>` stored as the session provider), and keep
-    # the bare ID only for unknown/ambiguous provider slugs (negative
-    # control) so custom/proxy base_url routing stays in charge.
-    if "/" in model:
-        if provider in _PROVIDER_MODELS or provider in _PROVIDER_DISPLAY:
-            return f"@{provider}:{model}"
-        # A named custom provider is only routable when the slug resolves to a
-        # real, unique custom_providers[] entry. `custom:missing` (stale
-        # session provider, no config entry) must NOT be minted into an
-        # @custom:missing:... route — resolve_model_provider() would take the
-        # named-provider lane and find no matching endpoint. `_unique_custom_provider_entry`
-        # returns None for unknown slugs and raises AmbiguousCustomProviderError
-        # for collisions, matching the point-of-return guard used by
-        # resolve_model_provider. (#7356 maintainer review)
-        if provider.startswith("custom:"):
-            custom_providers = cfg.get("custom_providers") if isinstance(cfg, dict) else []
-            if (
-                _unique_custom_provider_entry(
-                    custom_providers, _custom_provider_slug_key(provider)
-                )
-                is not None
-            ):
-                return f"@{provider}:{model}"
-        return model
-
-    return f"@{provider}:{model}"
-
-
-def canonical_model_provider_lane(model_id: str, model_provider: str | None = None) -> tuple[str, str | None]:
-    """Return the runtime-resolved model/provider pair used for lane comparisons."""
-    model = str(model_id or "").strip()
-    provider = str(model_provider or "").strip() or None
-    if not model:
-        return "", provider
-    resolved_model, resolved_provider, _ = resolve_model_provider(
-        model_with_provider_context(model, provider)
-    )
-    resolved_provider = str(resolved_provider or "").strip() or None
-    return str(resolved_model or "").strip(), resolved_provider
-
-
-def get_effective_default_model(config_data: dict | None = None) -> str:
-    """Resolve the effective Hermes default model from config, then env overrides."""
-    active_cfg = config_data if config_data is not None else cfg
-    default_model = DEFAULT_MODEL
-
-    model_cfg = active_cfg.get("model", {})
-    if isinstance(model_cfg, str):
-        default_model = model_cfg.strip()
-    elif isinstance(model_cfg, dict):
-        cfg_default = str(model_cfg.get("default") or "").strip()
-        if cfg_default:
-            default_model = cfg_default
-
-    env_model = (
-        os.getenv("HERMES_MODEL") or os.getenv("OPENAI_MODEL") or os.getenv("LLM_MODEL")
-    )
-    if env_model:
-        default_model = env_model.strip()
-    return default_model
+# Model-context helpers (split: api/_cfg/model_context.py) ------------------------------
+# Canonical implementations live in api/_cfg/model_context.py; re-exported here.
+from api._cfg.model_context import (  # noqa: F401
+    _ACP_SUBPROCESS_PROVIDERS,
+    canonical_model_provider_lane,
+    get_effective_default_model,
+    model_with_provider_context,
+)
 
 
 # Reasoning helpers (split: api/_cfg/reasoning.py) ----------------------------------------
