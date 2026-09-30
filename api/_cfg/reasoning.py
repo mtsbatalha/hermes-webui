@@ -819,6 +819,24 @@ def _lmstudio_model_reasoning_options(
             timeout=timeout,
         )
     except (TypeError, AttributeError):
+        # Emit via api.config's logger as well so tests that monkeypatch
+        # config.logger.warning observe the warning after the split.
+        _cfg_warning = None
+        try:
+            import api.config as _ac
+
+            _cfg_warning = getattr(getattr(_ac, "logger", None), "warning", None)
+        except Exception:
+            pass
+        if callable(_cfg_warning) and _cfg_warning is not logger.warning:
+            try:
+                _cfg_warning(
+                    "hermes_cli.lmstudio_model_reasoning_options has an unexpected signature; "
+                    "falling back to the built-in LM Studio reasoning probe",
+                    exc_info=True,
+                )
+            except Exception:
+                pass
         logger.warning(
             "hermes_cli.lmstudio_model_reasoning_options has an unexpected signature; "
             "falling back to the built-in LM Studio reasoning probe",
