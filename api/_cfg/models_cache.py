@@ -39,16 +39,6 @@ def _get_config_path() -> Path:
     return _DEFAULT_HERMES_HOME / "config.yaml"
 
 def _current_webui_version() -> str | None:
-    try:
-        import api.config as _ac_cw
-        fn = getattr(_ac_cw, '_current_webui_version', None)
-        if callable(fn) and fn is not _current_webui_version:
-            try:
-                return fn()
-            except Exception:
-                pass
-    except Exception:
-        pass
     """Lazy resolver for the WebUI version, used to stamp the disk cache (#1633).
 
     `api.updates` imports `api.config` at module-load time, so we cannot
@@ -62,6 +52,17 @@ def _current_webui_version() -> str | None:
     that happen during early init still work — the next call after init will
     stamp normally.
     """
+    # Honor monkeypatch on api.config (test isolation).
+    try:
+        import api.config as _ac_cw
+        fn = getattr(_ac_cw, '_current_webui_version', None)
+        if callable(fn) and fn is not _current_webui_version:
+            try:
+                return fn()
+            except Exception:
+                pass
+    except Exception:
+        pass
     try:
         # Read attribute via dotted lookup so we don't add an import-time edge.
         import sys as _sys
@@ -237,16 +238,6 @@ def _strip_volatile_codex_cache_fields(obj):
 
 
 def _codex_models_cache_fingerprint(path: Path) -> dict:
-    try:
-        import api.config as _ac_cc
-        fn = getattr(_ac_cc, '_codex_models_cache_fingerprint', None)
-        if callable(fn) and fn is not _codex_models_cache_fingerprint:
-            try:
-                return fn(path)
-            except Exception:
-                pass
-    except Exception:
-        pass
     """Return a content fingerprint of Codex's models_cache.json.
 
     Unlike _models_cache_file_fingerprint() (mtime_ns + size), this hashes the
@@ -261,6 +252,17 @@ def _codex_models_cache_fingerprint(path: Path) -> dict:
     and an unreadable/undecodable file falls back to the stat-based fingerprint
     so behaviour is never *less* safe than the stat-only version.
     """
+    # Honor monkeypatch on api.config (test isolation).
+    try:
+        import api.config as _ac_cc
+        fn = getattr(_ac_cc, '_codex_models_cache_fingerprint', None)
+        if callable(fn) and fn is not _codex_models_cache_fingerprint:
+            try:
+                return fn(path)
+            except Exception:
+                pass
+    except Exception:
+        pass
     p = Path(path).expanduser()
     fp: dict = {"path": str(p)}
     try:
@@ -551,16 +553,6 @@ def _plugin_tree_stamps(plugin_dir: Path) -> list:
 
 
 def _models_cache_source_fingerprint() -> dict:
-    try:
-        import api.config as _ac_src
-        fn = getattr(_ac_src, '_models_cache_source_fingerprint', None)
-        if callable(fn) and fn is not _models_cache_source_fingerprint:
-            try:
-                return fn()
-            except Exception:
-                pass
-    except Exception:
-        pass
     """Return the current config/auth/catalog fingerprint for /api/models cache.
 
     The auth.json axis uses a *content* fingerprint that excludes pure
@@ -571,6 +563,17 @@ def _models_cache_source_fingerprint() -> dict:
     mtime/size fingerprint because it is only rewritten on deliberate user
     edits (which can change anything) and does not churn on a timer.
     """
+    # Honor monkeypatch on api.config (test isolation).
+    try:
+        import api.config as _ac_src
+        fn = getattr(_ac_src, '_models_cache_source_fingerprint', None)
+        if callable(fn) and fn is not _models_cache_source_fingerprint:
+            try:
+                return fn()
+            except Exception:
+                pass
+    except Exception:
+        pass
     home = _active_profile_home()
     return {
         "config_yaml": _models_cache_file_fingerprint(_get_config_path()),
@@ -612,13 +615,6 @@ def _is_valid_models_cache(cache: object) -> bool:
 
 
 def _is_loadable_disk_cache(cache: object) -> bool:
-    try:
-        import api.config as _ac_il2
-        fn2 = getattr(_ac_il2, '_is_loadable_disk_cache', None)
-        if callable(fn2) and fn2 is not _is_loadable_disk_cache:
-            return bool(fn2(cache))
-    except Exception:
-        pass
     """Return True when an on-disk cache is safe to use after a process boot.
 
     Adds two checks on top of _is_valid_models_cache (#1633):
@@ -636,6 +632,14 @@ def _is_loadable_disk_cache(cache: object) -> bool:
     independent invalidation axis for breaking changes that lack a tag bump;
     bump it whenever the cache shape changes incompatibly.
     """
+    # Honor monkeypatch on api.config (test isolation).
+    try:
+        import api.config as _ac_il2
+        fn2 = getattr(_ac_il2, '_is_loadable_disk_cache', None)
+        if callable(fn2) and fn2 is not _is_loadable_disk_cache:
+            return bool(fn2(cache))
+    except Exception:
+        pass
     if not _is_valid_models_cache(cache):
         return False
     if not isinstance(cache, dict):  # appease type-narrowing — already guarded above
