@@ -1021,8 +1021,10 @@ def test_100dvh_viewport_height():
 
 
 def test_viewport_disables_page_zoom_for_native_pwa_shell():
-    """Installed PWA launches should not rubber-band into browser-style page zoom."""
-    assert 'name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"' in HTML
+    """WCAG 1.4.4: viewport must not lock zoom — user-scalable=no / maximum-scale=1 is deprecated."""
+    assert 'name="viewport" content="width=device-width, initial-scale=1"' in HTML
+    assert 'maximum-scale' not in HTML
+    assert 'user-scalable=no' not in HTML
 
 
 def test_pwa_safe_area_top_stays_scoped_to_installed_modes():
